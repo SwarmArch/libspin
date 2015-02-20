@@ -45,7 +45,11 @@ localenv.Program(
     source="pin_ctxt.cpp")
 
 localenv.Program(
-    target='pmp.so',
+    target='user.so',
+    source="user.cpp")
+
+localenv.Program(
+    target='libpmp.so',
     source="pmp.cpp")
 
 localenv.Append(CPPFLAGS = ['-march=native', '-g', '-std=c++0x', '-Wall', '-Wno-unknown-pragmas',

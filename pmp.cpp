@@ -29,6 +29,7 @@
 #include <iostream>
 #include <assert.h>
 #include <set>
+#include <mutex>
 
 namespace pmp {
 
@@ -61,8 +62,8 @@ struct ThreadContext {
     typedef std::array<uint64_t, 4> ymmReg;
     ymmReg fpRegs[REG_YMM_LAST - REG_YMM_BASE + 1];
     
-     // All other regs use a normal context (huge, and accessor methods are
-     // slow, but should be accessed sparingly)
+    // All other regs use a normal context (huge, and accessor methods are
+    // slow, but should be accessed sparingly)
     CONTEXT pinCtxt;
 
     ThreadContext() : state(UNCAPTURED) {}
@@ -199,6 +200,8 @@ std::array<ThreadContext, MAX_THREADS> contexts;
 // (this is the register index, NOT the value of the pointer)
 // When uncaptured, this register is nullptr
 REG tcReg;
+
+std::mutex captureMutex;
 
 void InsertRegReads(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
     for (REG r : inRegs) {
@@ -396,33 +399,34 @@ void SyscallExit(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
 
 ThreadContext* Capture(THREADID tid, CONTEXT* ctxt) {
     ThreadContext* tc = &contexts[tid];
-    assert(tc->state == UNCAPTURED);
-    assert(PIN_GetContextReg(ctxt, tcReg) == nullptr);
+    assert(tc->state == ThreadContext::UNCAPTURED);
+    assert(PIN_GetContextReg(ctxt, tcReg) == (ADDRINT)nullptr);
 
     InitContext(tc, ctxt);
     PIN_SetContextReg(ctxt, tcReg, (ADDRINT)tc);
-    tc->state = IDLE;
+    tc->state = ThreadContext::IDLE;
     __sync_synchronize();
-    
+
     // Let tool know this thread can now be used
-    captureCallback(tid);
+    //captureCallback(tid);
 
     // Become executor or wait till uncaptured
-    captureMutex.lock();
+    //captureMutex.lock();
+#if 0
     if (executorTid == -1) {
         captureMutex.unlock();
     } else {
         captureMutex.unlock();
         tc->waitMutex.lock();
-        if (tc->state == UNCAPTURED) {
+        if (tc->state == ThreadContext::UNCAPTURED) {
         
         }
     }
+#endif
 }
 
 void Uncapture(ThreadContext* tc, THREADID tid, CONTEXT* ctxt) {
-    CopyToPinContext();
-
+    CopyToPinContext(tc, ctxt);
 }
 
 void Trace(TRACE trace, VOID *v) {
