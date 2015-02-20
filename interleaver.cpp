@@ -40,12 +40,26 @@ void fini(int tid, void* dummy) {
 std::deque<uint32_t> threadQueue;
 
 // Forced-switch handling due to a syscall
-uint32_t syscallSwitch(pmp::ThreadContext* tc) {
+uint32_t uncapture(pmp::ThreadContext* tc) {
     assert(!threadQueue.empty());  // pmp should not call this with a single thread
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
     return next;
 }
+
+void capture(pmp::ThreadId tid) {
+    threadQueue.push_back(tid);
+}
+
+void threadStart(pmp::ThreadId tid) {
+    threadQueue.push_back(tid);
+    threadStartCount++;
+}
+
+void threadEnd(pmp::ThreadId tid) {
+    threadEndCount++;
+}
+
 
 void countLoad() {
     loadCount++;
@@ -57,15 +71,6 @@ uint32_t countInstrsAndSwitch(const pmp::ThreadContext* tc, uint32_t instrs) {
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
     return next;
-}
-
-void threadStart(pmp::ThreadId tid) {
-    threadQueue.push_back(tid);
-    threadStartCount++;
-}
-
-void threadEnd(pmp::ThreadId tid) {
-    threadEndCount++;
 }
 
 void trace(TRACE trace, pmp::TraceInfo& pt) {
@@ -93,7 +98,7 @@ void nullCallback(pmp::ThreadId tid) {
 int main(int argc, char *argv[]) {
     PIN_InitSymbols();
     if (PIN_Init(argc, argv)) printf("Wrong args\n");
-    pmp::init(trace, threadStart, threadEnd, nullCallback, nullCallback);
+    pmp::init(trace, threadStart, threadEnd, capture, uncapture);
     PIN_AddFiniFunction(fini, 0);
     PIN_StartProgram();
     return 0;

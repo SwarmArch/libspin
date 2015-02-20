@@ -34,7 +34,7 @@ namespace pmp {
     // Types
     struct ThreadContext;  // opaque by design
     typedef uint32_t ThreadId;
-    //typedef ThreadId (*SwitchFunc)();
+    typedef ThreadId (*UncaptureCallback)(ThreadContext* tc);
     typedef void (*ThreadCallback)(ThreadId);
 
     class TraceInfo {
@@ -60,7 +60,7 @@ namespace pmp {
 
     // Initialization
     void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb,
-            ThreadCallback captureCb, ThreadCallback uncaptureCb);
+            ThreadCallback captureCb, UncaptureCallback uncaptureCb);
 
     // Context querying/manipulation methods
     ThreadId getThreadId(const ThreadContext* tc);
