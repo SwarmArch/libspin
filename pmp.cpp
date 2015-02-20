@@ -29,12 +29,29 @@
 #include <iostream>
 #include <assert.h>
 #include <set>
+#include <map>
 
 #include "context.h"
 #include "pmp.h"
 
 //#define info(args...)
-#define info(fmt, args...) {printf("[pmp] " fmt "\n", args);}
+//#define info(fmt, args...) {printf("[pmp] " fmt "\n", args);}
+
+template <typename ...Args>
+void info(const char* fmt, Args... args) {
+    char buf[1024];
+    snprintf(buf, 1024, fmt, args...);
+    printf("[pmp] %s\n", buf);
+}
+
+template <typename ...Args>
+void panic(const char* fmt, Args... args) {
+    char buf[1024];
+    snprintf(buf, 1024, fmt, args...);
+    fprintf(stderr, "[pmp] Panic: %s\n", buf);
+    fflush(stderr);
+    exit(1);
+}
 
 namespace pmp {
 
@@ -60,7 +77,9 @@ ThreadCallback threadEndCallback = nullptr;
  * exceptional traces. Exceptional traces are those that begin with a syscall
  * instruction (and, by definition, are single-instruction traces).
  *
- * On regular traces, we add the following instrumentation:
+ * On regular traces, we add the following instrumentation to preserve the
+ * register context:
+ *  
  *  Original:
  *    BBL1: I1
  *          I2
@@ -190,10 +209,16 @@ ThreadCallback threadEndCallback = nullptr;
  * from somewhere else right into the syscall instruction, so both executor and
  * non-executor threads need to be able to go through it. The executor will call
  * ExecuteAt at the guard, so it won't go through the syscall.
+ *
+ * EXCEPTIONS:
+ *
+ * Exceptions just exist to ruin everyone's day, and we don't handle them for now. TODO.
  */
 
 
-void InsertRegReads(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
+/* Context read/write instrumentation */
+
+void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG> inRegs) {
     for (REG r : inRegs) {
         if (r == REG_RIP) continue;  // RIP must be handled differently
 
@@ -230,7 +255,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
 #undef CASE_READ_REG
 
         if (!nextClass) {
-            INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, r, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+            INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, r, IARG_CALL_ORDER, callOrder, IARG_END);
             continue;
         }
 
@@ -260,7 +285,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
 #undef CASE_READ_REG
 
         if (!nextClass) {
-            INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+            INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
             continue;
         }
 
@@ -273,11 +298,11 @@ void InsertRegReads(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
         // (but given how deprecated x87 FP is, will this really be an issue?)
         if (r == REG_X87) continue;
         fp = (AFUNPTR)ReadGenericReg;
-        INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+        INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
     }
 }
 
-void InsertRegWrites(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
+void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG> inRegs) {
     for (REG r : inRegs) {
         if (r == REG_RIP) continue;  // RIP must be handled differently
 
@@ -312,7 +337,7 @@ void InsertRegWrites(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
 #undef CASE_WRITE_REG
 
         if (!nextClass) {
-            INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, r, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+            INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, r, IARG_CALL_ORDER, callOrder, IARG_END);
             continue;
         }
 
@@ -342,7 +367,7 @@ void InsertRegWrites(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
 #undef CASE_WRITE_REG
 
         if (!nextClass) {
-            INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+            INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
             continue;
         }
 
@@ -352,7 +377,7 @@ void InsertRegWrites(INS ins, IPOINT ipoint, const std::set<REG> inRegs) {
         // FIXME(dsm): See X87 comment above
         if (r == REG_X87) continue;
         fp = (AFUNPTR)WriteGenericReg;
-        INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+        INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
     }
 }
 
@@ -373,11 +398,206 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
     for (uint32_t i = 0; i < REG_SEG_LAST-REG_SEG_BASE+1; i++) compRegs((REG)((int)REG_SEG_BASE + i), tc->segRegs[i], "seg");
 }
 
+void TraceGuard() {
+    info("In TraceGuard");
+}
+
+void SyscallTraceGuard() {
+    info("In SyscallTraceGuard");
+}
+
+ADDRINT IsTCRegValid(const ThreadContext* tc) {
+    return (tc != nullptr);
+}
+
+ThreadContext* SwitchHandler(ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
+    WriteReg<REG_RIP>(tc, nextPC);
+    return &contexts[nextThreadId];
+}
+
+ADDRINT GetPC(const ThreadContext* tc) {
+    return ReadReg<REG_RIP>(tc);
+}
+
+void FindInOutRegs(INS firstIns, INS lastIns, std::set<REG>& inRegs, std::set<REG>& outRegs) {
+    INS ins = firstIns;
+    while (true) {
+        uint32_t numOperands = INS_OperandCount(ins);
+        for (uint32_t op = 0; op < numOperands; op++) {
+            bool read = INS_OperandRead(ins, op);
+            bool write = INS_OperandWritten(ins, op);
+            assert(read || write);
+
+            // PIN is very finicky in getting registers out. This seems to
+            // work; Maybe it's better to use XED directly? (as in the zsim
+            // decoder)
+            REG reg = INS_OperandReg(ins, op);
+            if (!reg) reg = INS_OperandMemoryBaseReg(ins, op);
+            if (!reg) reg = INS_OperandMemoryIndexReg(ins, op);
+            if (!reg) reg = INS_OperandMemorySegmentReg(ins, op);
+            if (!reg) continue;
+
+            reg = REG_FullRegName(reg);  // eax -> rax, etc; o/w we'd miss a bunch of deps!
+            if (read) inRegs.insert(reg);
+            if (write) outRegs.insert(reg);
+        }
+
+        if (ins == lastIns) break;
+        ins = INS_Next(ins);
+        assert(INS_Valid(ins));
+    }
+
+    // FIXME rsp hack... can't get Pin to capture it reliably
+    if (true || outRegs.find(REG_RSP) != outRegs.end()) {
+        inRegs.insert(REG_RSP);
+    }
+    if (true || inRegs.find(REG_RSP) != inRegs.end()) {
+        outRegs.insert(REG_RSP);
+    }
+
+    // FIXME: Are we handling predication??? If an ins is predicated, we should add all its outRegs to its inRegs!
+}
+
 void Trace(TRACE trace, VOID *v) {
     TraceInfo pt;
-    trace
+    traceCallback(trace, pt);
     
+    // Order the trace's instructions
+    std::vector<INS> idxToIns;
+    for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
+        for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
+            idxToIns.push_back(ins);
+        }
+    }
+    uint32_t traceInstrs = idxToIns.size();
+    std::map<INS, uint32_t> insToIdx;
+    for (uint32_t i = 0; i < traceInstrs; i++) insToIdx[idxToIns[i]] = i;
+
+    // Find callpoint and switchpoint order
+    struct IPoints {
+        bool before;
+        bool after;
+        bool taken_branch;
+
+        IPoints() : before(false), after(false), taken_branch(false) {}
+    };
+
+    IPoints callIPoints[traceInstrs];
+    IPoints switchIPoints[traceInstrs];
+
+    auto findIPoints = [&](CallpointVector cvec, IPoints* ipoints) {
+        for (auto callpoint : cvec) {
+            INS ins = std::get<0>(callpoint);
+            IPOINT ipoint = std::get<1>(callpoint);
+            uint32_t idx = insToIdx[ins];
+            assert(idx < traceInstrs);
+            switch (ipoint) {
+                case IPOINT_BEFORE: ipoints[idx].before = true; break;
+                case IPOINT_AFTER: ipoints[idx].after = true; break;
+                case IPOINT_TAKEN_BRANCH: ipoints[idx].taken_branch = true; break;
+                default: assert(false);
+            }
+        }
+    };
+
+    findIPoints(pt.callpoints, callIPoints);
+    findIPoints(pt.switchpoints, switchIPoints);
+
+    if (switchIPoints[0].before == true) {
+        panic("Cannot set a switchpoint at the start of a basic block (IPOINT_BEFORE first instruction)");
+    }
+
+    // Find atomic instruction sequences (just looking at before/after points;
+    // we handle taken branches differently)
+    std::vector< std::tuple<uint32_t, uint32_t> > insSeqs;
+    uint32_t curStart = 0;
+    uint32_t curEnd = 0;
+    while (true) {
+        if (curEnd == traceInstrs-1) {
+            insSeqs.push_back(std::tie(curStart, curEnd));
+            break;
+        }
+        bool hasSwitch = switchIPoints[curEnd].after || switchIPoints[curEnd+1].before;
+        bool closeSeq = callIPoints[curEnd].after || callIPoints[curEnd+1].before || hasSwitch;
+
+        if (closeSeq) {
+            insSeqs.push_back(std::tie(curStart, curEnd));
+            curStart = curEnd + 1;
+        }
+
+        if (hasSwitch) break;
+     
+        curEnd++;
+    }
+
+    // Insert the guard, predicated to reduce overheads (as it takes the context!)
+    INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)IsTCRegValid, IARG_REG_VALUE, tcReg,
+            IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+    INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard, IARG_REG_VALUE, tcReg,
+            IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+
+    // Insert reads and writes around instruction sequences
+    // Reads: Last thing before first instr in sequence
+    // Writes: First thing after last instr in sequence, and after taken branches
+    for (auto seq : insSeqs) {
+        uint32_t firstIdx = std::get<0>(seq);
+        uint32_t lastIdx = std::get<1>(seq);
+
+        std::set<REG> inRegs, outRegs;
+        FindInOutRegs(idxToIns[firstIdx], idxToIns[lastIdx], inRegs, outRegs);
+        InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_LAST, inRegs);
+        if (INS_HasFallThrough(idxToIns[lastIdx])) {
+            InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
+        }
+
+        // Write out partial regsets on taken branches
+        for (uint32_t idx = firstIdx; idx <= lastIdx; idx++) {
+            if (INS_IsBranchOrCall(idxToIns[idx]) || INS_IsRet(idxToIns[idx])) {
+                std::set<REG> inRegs, outRegs;
+                FindInOutRegs(idxToIns[firstIdx], idxToIns[idx], inRegs, outRegs);
+                InsertRegWrites(idxToIns[lastIdx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, outRegs);
+            }
+        }
+    }
     
+    // Insert switchpoint handlers
+    auto insertSwitchHandler = [&](uint32_t idx, IPOINT ipoint) {
+        assert(idx > 0 || ipoint != IPOINT_BEFORE);
+        // NOTE: Do the calls and indirect jump come out in the same order? We might have to tweak the switchpoint priority
+        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RAX, IARG_RETURN_REGS, tcReg, IARG_END);
+        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, REG_RAX, IARG_END);
+        INS_InsertIndirectJump(idxToIns[idx], ipoint, REG_RAX);
+    };
+    
+    for (uint32_t idx = 0; idx < traceInstrs; idx++) {
+        // Evaluation order matters here: If there are swtichpoints in taken
+        // and fallthrough paths, we want to handle both
+        if (switchIPoints[idx].before) {
+            insertSwitchHandler(idx, IPOINT_BEFORE);
+            break;
+        }
+
+        if (switchIPoints[idx].taken_branch) {
+            insertSwitchHandler(idx, IPOINT_TAKEN_BRANCH);
+        }
+
+        if (switchIPoints[idx].after) {
+            insertSwitchHandler(idx, IPOINT_AFTER);
+            break;
+        }
+    }
+    
+
+    // TODO: Syscall breakup code. 
+}
+
+#if 0
+    for (uint32_t i = 0; i < traceInstrs; i++) {
+
+    }
+
+
+
     for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
         std::set<REG> inRegs, outRegs;
         for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
@@ -452,8 +672,8 @@ void Trace(TRACE trace, VOID *v) {
 #endif
     }
 
-
 }
+#endif
 
 void SyscallEnter(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
     ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);

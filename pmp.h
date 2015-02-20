@@ -37,10 +37,12 @@ namespace pmp {
     typedef ThreadId (*UncaptureCallback)(ThreadContext* tc);
     typedef void (*ThreadCallback)(ThreadId);
 
+    typedef std::vector< std::tuple<INS, IPOINT> > CallpointVector;
+
     class TraceInfo {
         private:
-            std::vector< std::tuple<INS, IPOINT> > callpoints;
-            std::vector< std::tuple<INS, IPOINT> > switchpoints;
+            CallpointVector callpoints;
+            CallpointVector switchpoints;
 
         public:
             template <typename ...Args>
@@ -54,6 +56,8 @@ namespace pmp {
                 switchpoints.push_back(std::make_tuple(ins, ipoint));
                 INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, REG_RAX /* jump target */, IARG_END);
             }
+
+            friend void Trace(TRACE trace, VOID *v);
     };
 
     typedef void (*TraceCallback)(TRACE, TraceInfo&);
