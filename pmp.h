@@ -27,6 +27,7 @@
 #include "pin/pin.H"
 
 // Fast context macros to use in analysis routines
+// NOTE: We actually have no way to enforce constness, but have both defs to mirror Pin
 #define IARG_PMP_CONST_CONTEXT IARG_REG_VALUE, pmp::__getContextReg()
 #define IARG_PMP_CONTEXT IARG_REG_VALUE, pmp::__getContextReg()
 
@@ -39,6 +40,7 @@ namespace pmp {
 
     typedef std::vector< std::tuple<INS, IPOINT> > CallpointVector;
 
+    // Instrumentation: all analysis functions must be registered through this interface
     class TraceInfo {
         private:
             CallpointVector callpoints;
@@ -57,7 +59,7 @@ namespace pmp {
                 INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, REG_RAX /* jump target */, IARG_CALL_ORDER, CALL_ORDER_DEFAULT-1, IARG_END);
             }
 
-            friend void Trace(TRACE trace, VOID *v);
+            friend void Trace(TRACE trace, VOID* v);
     };
 
     typedef void (*TraceCallback)(TRACE, TraceInfo&);
@@ -71,11 +73,7 @@ namespace pmp {
     uint64_t getReg(const ThreadContext* tc, uint32_t reg);
     void setReg(ThreadContext* tc, uint32_t reg, uint64_t val);
 
-    // Instrumentation: all analysis functions must be registered through this interface
-    //void __preInsertCall(INS ins, IPOINT ipoint);
-    //void __postInsertCall(INS ins, IPOINT ipoint);
-    //void __postInsertSwitchpoint(INS ins, IPOINT ipoint);
-
+    // Internal method --- used by IARG macros
     REG __getContextReg();
 };
 
