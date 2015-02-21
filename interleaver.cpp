@@ -83,11 +83,11 @@ void trace(TRACE trace, pmp::TraceInfo& pt) {
             if (INS_HasMemoryRead2(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
         }
 
-        /*INS tailIns = BBL_InsTail(bbl);
-        if (INS_HasFallThrough(tailIns)) {
-            pt.insertSwitchCall(tailIns, IPOINT_AFTER, (AFUNPTR) countInstrsAndSwitch,
+        INS tailIns = BBL_InsTail(bbl);
+        if (INS_HasFallThrough(tailIns) && BBL_InsHead(bbl) != tailIns) {
+            pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
                     IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
-        }*//*
+        }/*
         if (INS_IsBranchOrCall(tailIns) || INS_IsRet(tailIns)) {
             pt.insertSwitchCall(tailIns, IPOINT_TAKEN_BRANCH, (AFUNPTR) countInstrsAndSwitch,
                     IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));

@@ -454,10 +454,14 @@ void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t 
 
     // FIXME: Are we handling predication??? If an ins is predicated, we should add all its outRegs to its inRegs!
     for (REG r : inRegs) outRegs.insert(r);
+
+    // FIXME: Always read and write RAX as a quick patch to paper over the fact that it's sometimes not caught. Won't work with multiple threads...
+    inRegs.insert(REG_RAX);
+    outRegs.insert(REG_RAX);
 }
 
 void PrintIns(ADDRINT pc) {
-    //info(" 0x%lx", pc);
+    info(" 0x%lx", pc);
 }
 
 void Trace(TRACE trace, VOID *v) {
@@ -535,7 +539,7 @@ void Trace(TRACE trace, VOID *v) {
         curEnd++;
     }
 
-#if 0
+#if 1
     for (INS ins : idxToIns) {
         const char* seqStr = "|";
         for (auto seq: insSeqs) {
@@ -543,7 +547,7 @@ void Trace(TRACE trace, VOID *v) {
             else if (idxToIns[std::get<0>(seq)] == ins) seqStr = "/";
             else if (idxToIns[std::get<1>(seq)] == ins) seqStr = "\\";
         }
-        info("  %s %s", seqStr, INS_Disassemble(ins).c_str());
+        info("  0x%lx %s %s", INS_Address(ins), seqStr, INS_Disassemble(ins).c_str());
     }
 #endif
 
@@ -586,7 +590,7 @@ void Trace(TRACE trace, VOID *v) {
     // Insert switchpoint handlers
     auto insertSwitchHandler = [&](uint32_t idx, IPOINT ipoint) {
         assert(idx > 0 || ipoint != IPOINT_BEFORE);
-        assert(ipoint == IPOINT_AFTER); // for nextPC...
+        assert(ipoint == IPOINT_BEFORE); // for nextPC...
         // NOTE: Do the calls and indirect jump come out in the same order? We might have to tweak the switchpoint priority
         INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP/*, IARG_FALLTHROUGH_ADDR*/, IARG_REG_VALUE, REG_RAX, IARG_RETURN_REGS, tcReg, IARG_END);
         INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, REG_RAX, IARG_END);
