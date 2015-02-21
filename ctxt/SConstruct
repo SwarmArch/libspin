@@ -44,14 +44,6 @@ localenv.Program(
     target='pin_ctxt.so',
     source="pin_ctxt.cpp")
 
-localenv.Program(
-    target='user.so',
-    source="user.cpp")
-
-localenv.Program(
-    target='libpmp.so',
-    source="pmp.cpp")
-
 localenv.Append(CPPFLAGS = ['-march=native', '-g', '-std=c++0x', '-Wall', '-Wno-unknown-pragmas',
     '-fomit-frame-pointer', '-fno-stack-protector', '-MMD', '-mavx',
     '-DBIGARRAY_MULTIPLIER=1', '-DUSING_XED', '-DTARGET_IA32E', '-DHOST_IA32E',

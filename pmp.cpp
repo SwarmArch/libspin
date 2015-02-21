@@ -34,8 +34,7 @@
 #include "context.h"
 #include "pmp.h"
 
-//#define info(args...)
-//#define info(fmt, args...) {printf("[pmp] " fmt "\n", args);}
+namespace pmp {
 
 template <typename ...Args>
 void info(const char* fmt, Args... args) {
@@ -52,8 +51,6 @@ void panic(const char* fmt, Args... args) {
     fflush(stderr);
     exit(1);
 }
-
-namespace pmp {
 
 // Thread context state (2Kthreads is Pin's current limit)
 #define MAX_THREADS 2048
@@ -398,20 +395,24 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
     for (uint32_t i = 0; i < REG_SEG_LAST-REG_SEG_BASE+1; i++) compRegs((REG)((int)REG_SEG_BASE + i), tc->segRegs[i], "seg");
 }
 
-void TraceGuard() {
-    info("In TraceGuard");
+ThreadContext* TraceGuard(THREADID tid, const CONTEXT* ctxt) {
+    info("[%d] In TraceGuard, RIP 0x%lx", tid, PIN_GetContextReg(ctxt, REG_RIP));
+    return &contexts[tid];
 }
 
 void SyscallTraceGuard() {
     info("In SyscallTraceGuard");
 }
 
-ADDRINT IsTCRegValid(const ThreadContext* tc) {
-    return (tc != nullptr);
+ADDRINT IsTCRegInvalid(const ThreadContext* tc) {
+    return (tc == nullptr);
 }
 
 ThreadContext* SwitchHandler(ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
+    assert(tc);
     WriteReg<REG_RIP>(tc, nextPC);
+    assert(nextThreadId < MAX_THREADS);
+    info("Switch @ 0x%lx", nextPC);
     return &contexts[nextThreadId];
 }
 
@@ -419,9 +420,9 @@ ADDRINT GetPC(const ThreadContext* tc) {
     return ReadReg<REG_RIP>(tc);
 }
 
-void FindInOutRegs(INS firstIns, INS lastIns, std::set<REG>& inRegs, std::set<REG>& outRegs) {
-    INS ins = firstIns;
-    while (true) {
+void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t lastIdx, std::set<REG>& inRegs, std::set<REG>& outRegs) {
+    for (uint32_t idx = firstIdx; idx <= lastIdx; idx++) {
+        INS ins = idxToIns[idx];  // you'd think INS_Next would work; not across BBLs!
         uint32_t numOperands = INS_OperandCount(ins);
         for (uint32_t op = 0; op < numOperands; op++) {
             bool read = INS_OperandRead(ins, op);
@@ -441,12 +442,8 @@ void FindInOutRegs(INS firstIns, INS lastIns, std::set<REG>& inRegs, std::set<RE
             if (read) inRegs.insert(reg);
             if (write) outRegs.insert(reg);
         }
-
-        if (ins == lastIns) break;
-        ins = INS_Next(ins);
-        assert(INS_Valid(ins));
     }
-
+    
     // FIXME rsp hack... can't get Pin to capture it reliably
     if (true || outRegs.find(REG_RSP) != outRegs.end()) {
         inRegs.insert(REG_RSP);
@@ -456,6 +453,11 @@ void FindInOutRegs(INS firstIns, INS lastIns, std::set<REG>& inRegs, std::set<RE
     }
 
     // FIXME: Are we handling predication??? If an ins is predicated, we should add all its outRegs to its inRegs!
+    for (REG r : inRegs) outRegs.insert(r);
+}
+
+void PrintIns(ADDRINT pc) {
+    //info(" 0x%lx", pc);
 }
 
 void Trace(TRACE trace, VOID *v) {
@@ -518,7 +520,10 @@ void Trace(TRACE trace, VOID *v) {
             break;
         }
         bool hasSwitch = switchIPoints[curEnd].after || switchIPoints[curEnd+1].before;
-        bool closeSeq = callIPoints[curEnd].after || callIPoints[curEnd+1].before || hasSwitch;
+        bool closeSeq = callIPoints[curEnd].after || callIPoints[curEnd+1].before || hasSwitch ||
+            INS_IsSyscall(idxToIns[curEnd]) || INS_IsSyscall(idxToIns[curEnd+1]);
+
+
 
         if (closeSeq) {
             insSeqs.push_back(std::tie(curStart, curEnd));
@@ -530,11 +535,24 @@ void Trace(TRACE trace, VOID *v) {
         curEnd++;
     }
 
+#if 0
+    for (INS ins : idxToIns) {
+        const char* seqStr = "|";
+        for (auto seq: insSeqs) {
+            if (idxToIns[std::get<0>(seq)] == ins && idxToIns[std::get<1>(seq)] == ins) seqStr = "*";
+            else if (idxToIns[std::get<0>(seq)] == ins) seqStr = "/";
+            else if (idxToIns[std::get<1>(seq)] == ins) seqStr = "\\";
+        }
+        info("  %s %s", seqStr, INS_Disassemble(ins).c_str());
+    }
+#endif
+
     // Insert the guard, predicated to reduce overheads (as it takes the context!)
-    INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)IsTCRegValid, IARG_REG_VALUE, tcReg,
+    INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)IsTCRegInvalid, IARG_REG_VALUE, tcReg,
             IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
-    INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard, IARG_REG_VALUE, tcReg,
-            IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+    INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard,
+            IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_RETURN_REGS, tcReg,
+            IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
 
     // Insert reads and writes around instruction sequences
     // Reads: Last thing before first instr in sequence
@@ -544,18 +562,23 @@ void Trace(TRACE trace, VOID *v) {
         uint32_t lastIdx = std::get<1>(seq);
 
         std::set<REG> inRegs, outRegs;
-        FindInOutRegs(idxToIns[firstIdx], idxToIns[lastIdx], inRegs, outRegs);
+        FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
         InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_LAST, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
+            // Uncomment to do *expensive* context-to-register comparisons
+            InsertRegReads(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, {REG_RAX});
+            INS_InsertCall(idxToIns[lastIdx], IPOINT_AFTER, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
         }
 
         // Write out partial regsets on taken branches
         for (uint32_t idx = firstIdx; idx <= lastIdx; idx++) {
             if (INS_IsBranchOrCall(idxToIns[idx]) || INS_IsRet(idxToIns[idx])) {
                 std::set<REG> inRegs, outRegs;
-                FindInOutRegs(idxToIns[firstIdx], idxToIns[idx], inRegs, outRegs);
-                InsertRegWrites(idxToIns[lastIdx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, outRegs);
+                FindInOutRegs(idxToIns, firstIdx, idx, inRegs, outRegs);
+                InsertRegWrites(idxToIns[idx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, outRegs);
+                InsertRegReads(idxToIns[idx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, {REG_RAX});
+                INS_InsertCall(idxToIns[idx], IPOINT_TAKEN_BRANCH, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
             }
         }
     }
@@ -563,8 +586,9 @@ void Trace(TRACE trace, VOID *v) {
     // Insert switchpoint handlers
     auto insertSwitchHandler = [&](uint32_t idx, IPOINT ipoint) {
         assert(idx > 0 || ipoint != IPOINT_BEFORE);
+        assert(ipoint == IPOINT_AFTER); // for nextPC...
         // NOTE: Do the calls and indirect jump come out in the same order? We might have to tweak the switchpoint priority
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RAX, IARG_RETURN_REGS, tcReg, IARG_END);
+        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP/*, IARG_FALLTHROUGH_ADDR*/, IARG_REG_VALUE, REG_RAX, IARG_RETURN_REGS, tcReg, IARG_END);
         INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, REG_RAX, IARG_END);
         INS_InsertIndirectJump(idxToIns[idx], ipoint, REG_RAX);
     };
@@ -587,6 +611,9 @@ void Trace(TRACE trace, VOID *v) {
         }
     }
     
+    for (uint32_t idx = 0; idx < traceInstrs; idx++) {
+        INS_InsertCall(idxToIns[idx], IPOINT_BEFORE, (AFUNPTR)PrintIns, IARG_ADDRINT, INS_Address(idxToIns[idx]), IARG_END);
+    }
 
     // TODO: Syscall breakup code. 
 }
@@ -676,7 +703,9 @@ void Trace(TRACE trace, VOID *v) {
 #endif
 
 void SyscallEnter(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
+    //panic("syscall!");
     ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);
+    assert(tc);
     CopyToPinContext(tc, ctxt);
 }
 
@@ -684,6 +713,7 @@ void SyscallExit(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
     //info("syscall exit");
     // dsm: The syscall might have changed ANYTHING. Do a full context write.
     ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);
+    assert(tc);
     InitContext(tc, ctxt);
 }
 
@@ -697,6 +727,7 @@ ThreadContext* Capture(THREADID tid, CONTEXT* ctxt) {
     tc->state = ThreadContext::IDLE;
     __sync_synchronize();
 
+    assert(false);
     // Let tool know this thread can now be used
     //captureCallback(tid);
 
@@ -737,6 +768,8 @@ void ThreadFini(THREADID tid, const CONTEXT* ctxt, INT32 code, VOID* v) {
     threadEndCallback(tid);
 }
 
+/* Public interface */
+
 void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, ThreadCallback captureCb, UncaptureCallback uncaptureCb) {
     traceCallback = traceCb;
     threadStartCallback = startCb;
@@ -752,4 +785,49 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, T
     PIN_AddSyscallExitFunction(SyscallExit, 0);
 }
 
+ThreadId getThreadId(const ThreadContext* tc) {
+    assert(tc);
+    uint32_t tid = tc - &contexts[0];
+    assert(tid < MAX_THREADS);
+    return tid;
 }
+
+uint64_t getReg(const ThreadContext* tc, REG reg) {
+    assert(tc);
+    reg = REG_FullRegName(reg);
+    if (reg == REG_RIP) return tc->rip;
+    if (reg == REG_RFLAGS) return tc->rflags;
+    uint32_t regIdx = (uint32_t)reg;
+    if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) return tc->gpRegs[regIdx - REG_GR_BASE];
+    if (regIdx >= REG_SEG_BASE && regIdx <= REG_SEG_LAST) return tc->gpRegs[regIdx - REG_SEG_BASE];
+    // NOTE: It's possible to support extra regs if you need them, but I don't
+    // want to get into >64-bit regs and I don't think we'll ever need them
+    panic("getReg(): Register %s (%d) not supported for now (edit me!)",
+             REG_StringShort(reg).c_str(), regIdx);
+    return -1l;
+}
+
+void setReg(ThreadContext* tc, REG reg, uint64_t val) {
+    assert(tc);
+    reg = REG_FullRegName(reg);
+    uint32_t regIdx = (uint32_t)reg;
+    if (reg == REG_RIP) {
+        tc->rip = val;
+    } else if (reg == REG_RFLAGS) {
+        tc->rflags = val;
+    } else if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) {
+        tc->gpRegs[regIdx - REG_GR_BASE] = val;
+    } else if (regIdx >= REG_SEG_BASE && regIdx <= REG_SEG_LAST) {
+        tc->gpRegs[regIdx - REG_SEG_BASE] = val;
+    } else {
+        panic("setReg(): Register %s (%d) not supported for now (edit me!)",
+                REG_StringShort(reg).c_str(), regIdx);
+    }
+}
+
+REG __getContextReg() {
+    assert(traceCallback);  // o/w not initialized
+    return tcReg;
+}
+
+}  // namespace pmp

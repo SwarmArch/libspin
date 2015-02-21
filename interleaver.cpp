@@ -29,11 +29,12 @@ uint64_t threadStartCount = 0;
 uint64_t threadEndCount = 0;
 
 void fini(int tid, void* dummy) {
-    printf("Interleaver tool finished, stats:\n");
-    printf(" instructions: %ld\n", insCount);
-    printf(" loads: %ld\n", loadCount);
-    printf(" threads: %ld starts, %ld ends\n", threadStartCount, threadEndCount);
-    printf(" syscalls: %ld\n", syscallCount);
+    fprintf(stderr, "Interleaver tool finished, stats:\n");
+    fprintf(stderr, " instructions: %ld\n", insCount);
+    fprintf(stderr, " loads: %ld\n", loadCount);
+    fprintf(stderr, " threads: %ld starts, %ld ends\n", threadStartCount, threadEndCount);
+    fprintf(stderr, " syscalls: %ld\n", syscallCount);
+    fflush(stderr);
 }
 
 // Used to round-robin through threads
@@ -54,6 +55,7 @@ void capture(pmp::ThreadId tid) {
 void threadStart(pmp::ThreadId tid) {
     threadQueue.push_back(tid);
     threadStartCount++;
+    printf("interleaver: threadStart\n");
 }
 
 void threadEnd(pmp::ThreadId tid) {
@@ -70,6 +72,7 @@ uint32_t countInstrsAndSwitch(const pmp::ThreadContext* tc, uint32_t instrs) {
     threadQueue.push_back(pmp::getThreadId(tc));
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
+    printf("switching to %d\n", next);
     return next;
 }
 
@@ -80,15 +83,18 @@ void trace(TRACE trace, pmp::TraceInfo& pt) {
             if (INS_HasMemoryRead2(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
         }
 
-        INS tailIns = BBL_InsTail(bbl);
+        /*INS tailIns = BBL_InsTail(bbl);
         if (INS_HasFallThrough(tailIns)) {
             pt.insertSwitchCall(tailIns, IPOINT_AFTER, (AFUNPTR) countInstrsAndSwitch,
-                    IARG_PMP_CONST_CONTEXT, BBL_NumIns(bbl));
-        }
+                    IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+        }*//*
         if (INS_IsBranchOrCall(tailIns) || INS_IsRet(tailIns)) {
             pt.insertSwitchCall(tailIns, IPOINT_TAKEN_BRANCH, (AFUNPTR) countInstrsAndSwitch,
-                    IARG_PMP_CONST_CONTEXT, BBL_NumIns(bbl));
+                    IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
         }
+
+        pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
+                IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));*/
     }
 }
 

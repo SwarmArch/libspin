@@ -54,7 +54,7 @@ namespace pmp {
             template <typename ...Args>
             void insertSwitchCall(INS ins, IPOINT ipoint, AFUNPTR func, Args... args) {
                 switchpoints.push_back(std::make_tuple(ins, ipoint));
-                INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, REG_RAX /* jump target */, IARG_END);
+                INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, REG_RAX /* jump target */, IARG_CALL_ORDER, CALL_ORDER_DEFAULT-1, IARG_END);
             }
 
             friend void Trace(TRACE trace, VOID *v);
@@ -72,9 +72,9 @@ namespace pmp {
     void setReg(ThreadContext* tc, uint32_t reg, uint64_t val);
 
     // Instrumentation: all analysis functions must be registered through this interface
-    void __preInsertCall(INS ins, IPOINT ipoint);
-    void __postInsertCall(INS ins, IPOINT ipoint);
-    void __postInsertSwitchpoint(INS ins, IPOINT ipoint);
+    //void __preInsertCall(INS ins, IPOINT ipoint);
+    //void __postInsertCall(INS ins, IPOINT ipoint);
+    //void __postInsertSwitchpoint(INS ins, IPOINT ipoint);
 
     REG __getContextReg();
 };

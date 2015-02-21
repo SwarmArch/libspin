@@ -26,13 +26,14 @@ env.Replace(CC = 'gcc-4.8')
 env.Replace(CXX = 'g++-4.8 -O3')
 
 localenv = env.Clone()
-localenv.Program(
-    target='interleaver.so',
-    source="interleaver.cpp")
+
+#pmp = localenv.SharedLibrary(
+#    target='libpmp.so',
+#    source="pmp.cpp")
 
 localenv.Program(
-    target='libpmp.so',
-    source="pmp.cpp")
+    target='interleaver.so',
+    source=["interleaver.cpp", "pmp.cpp"],)
 
 localenv.Append(CPPFLAGS = ['-march=native', '-g', '-std=c++0x', '-Wall', '-Wno-unknown-pragmas',
     '-fomit-frame-pointer', '-fno-stack-protector', '-MMD', '-mavx',
