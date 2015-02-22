@@ -36,6 +36,13 @@
 
 namespace pmp {
 
+// Uncomment to do *expensive* context-to-register comparisons; only works on
+// single-threaded code, where registers and the actual context stay in sync.
+// Useful to catch bugs exhaustively in single-threaded code.
+// Breaks Pin with -inline 0 (Pin tries to spill FS, craps itself)
+//#define DEBUG_COMPARE_REGS
+
+
 template <typename ...Args>
 void info(const char* fmt, Args... args) {
     char buf[1024];
@@ -412,7 +419,7 @@ ThreadContext* SwitchHandler(ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThre
     assert(tc);
     WriteReg<REG_RIP>(tc, nextPC);
     assert(nextThreadId < MAX_THREADS);
-    info("Switch @ 0x%lx", nextPC);
+    //info("Switch @ 0x%lx", nextPC);
     return &contexts[nextThreadId];
 }
 
@@ -420,48 +427,45 @@ ADDRINT GetPC(const ThreadContext* tc) {
     return ReadReg<REG_RIP>(tc);
 }
 
+void FindInOutRegs(INS ins, std::set<REG>& inRegs, std::set<REG>& outRegs) {
+    for (uint32_t i = 0; i < INS_MaxNumRRegs(ins); i++) {
+        REG reg = INS_RegR(ins, i);
+        if (REG_valid(reg)) {
+            reg = REG_FullRegName(reg);
+            inRegs.insert(reg);
+        }
+    }
+
+    for (uint32_t i = 0; i < INS_MaxNumWRegs(ins); i++) {
+        REG reg = INS_RegW(ins, i);
+        if (REG_valid(reg)) {
+            reg = REG_FullRegName(reg);
+            outRegs.insert(reg);
+        }
+    }
+}
+
 void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t lastIdx, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     for (uint32_t idx = firstIdx; idx <= lastIdx; idx++) {
         INS ins = idxToIns[idx];  // you'd think INS_Next would work; not across BBLs!
-        uint32_t numOperands = INS_OperandCount(ins);
-        for (uint32_t op = 0; op < numOperands; op++) {
-            bool read = INS_OperandRead(ins, op);
-            bool write = INS_OperandWritten(ins, op);
-            assert(read || write);
-
-            // PIN is very finicky in getting registers out. This seems to
-            // work; Maybe it's better to use XED directly? (as in the zsim
-            // decoder)
-            REG reg = INS_OperandReg(ins, op);
-            if (!reg) reg = INS_OperandMemoryBaseReg(ins, op);
-            if (!reg) reg = INS_OperandMemoryIndexReg(ins, op);
-            if (!reg) reg = INS_OperandMemorySegmentReg(ins, op);
-            if (!reg) continue;
-
-            reg = REG_FullRegName(reg);  // eax -> rax, etc; o/w we'd miss a bunch of deps!
-            if (read) inRegs.insert(reg);
-            if (write) outRegs.insert(reg);
-        }
+        FindInOutRegs(ins, inRegs, outRegs);
     }
     
-    // FIXME rsp hack... can't get Pin to capture it reliably
-    if (true || outRegs.find(REG_RSP) != outRegs.end()) {
-        inRegs.insert(REG_RSP);
-    }
-    if (true || inRegs.find(REG_RSP) != inRegs.end()) {
-        outRegs.insert(REG_RSP);
-    }
-
-    // FIXME: Are we handling predication??? If an ins is predicated, we should add all its outRegs to its inRegs!
-    for (REG r : inRegs) outRegs.insert(r);
+    // Predicated instructions, partial updates, flags registers, etc., can
+    // cause no or incomplete writes. We could try to be smart and precise, but
+    // for now, do the simple thing and always read the regs written
+    for (REG r : outRegs) inRegs.insert(r);
+    //for (REG r : inRegs) outRegs.insert(r);
 
     // FIXME: Always read and write RAX as a quick patch to paper over the fact that it's sometimes not caught. Won't work with multiple threads...
     inRegs.insert(REG_RAX);
     outRegs.insert(REG_RAX);
+
+    // FIXME: Can't deal with segment regs this way, they cause violations with -inline 0?
 }
 
 void PrintIns(ADDRINT pc) {
-    info(" 0x%lx", pc);
+    //info(" 0x%lx", pc);
 }
 
 void Trace(TRACE trace, VOID *v) {
@@ -525,9 +529,8 @@ void Trace(TRACE trace, VOID *v) {
         }
         bool hasSwitch = switchIPoints[curEnd].after || switchIPoints[curEnd+1].before;
         bool closeSeq = callIPoints[curEnd].after || callIPoints[curEnd+1].before || hasSwitch ||
-            INS_IsSyscall(idxToIns[curEnd]) || INS_IsSyscall(idxToIns[curEnd+1]);
-
-
+            INS_IsSyscall(idxToIns[curEnd]) || INS_IsSyscall(idxToIns[curEnd+1]) ||
+            INS_Stutters(idxToIns[curEnd]) || INS_Stutters(idxToIns[curEnd+1]);
 
         if (closeSeq) {
             insSeqs.push_back(std::tie(curStart, curEnd));
@@ -540,14 +543,20 @@ void Trace(TRACE trace, VOID *v) {
     }
 
 #if 1
-    for (INS ins : idxToIns) {
+    for (auto seq : insSeqs) {
+        info(" seq: %d-%d", std::get<0>(seq), std::get<1>(seq));
+    }
+    uint32_t maxInstr = std::get<1>(insSeqs[insSeqs.size()-1]);
+    for (uint32_t idx = 0; idx < traceInstrs; idx++) {
+        INS ins = idxToIns[idx];
         const char* seqStr = "|";
         for (auto seq: insSeqs) {
-            if (idxToIns[std::get<0>(seq)] == ins && idxToIns[std::get<1>(seq)] == ins) seqStr = "*";
-            else if (idxToIns[std::get<0>(seq)] == ins) seqStr = "/";
-            else if (idxToIns[std::get<1>(seq)] == ins) seqStr = "\\";
+            if (idx > maxInstr) seqStr = "X";
+            else if (std::get<0>(seq) == idx && std::get<1>(seq) == idx) seqStr = "*";
+            else if (std::get<0>(seq) == idx) seqStr = "/";
+            else if (std::get<1>(seq) == idx) seqStr = "\\";
         }
-        info("  0x%lx %s %s", INS_Address(ins), seqStr, INS_Disassemble(ins).c_str());
+        info("  %3d: 0x%lx %s %s", idx, INS_Address(ins), seqStr, INS_Disassemble(ins).c_str());
     }
 #endif
 
@@ -555,7 +564,7 @@ void Trace(TRACE trace, VOID *v) {
     INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)IsTCRegInvalid, IARG_REG_VALUE, tcReg,
             IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
     INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard,
-            IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_RETURN_REGS, tcReg,
+            IARG_THREAD_ID, /*IARG_CONST_CONTEXT*/ IARG_CONTEXT, IARG_RETURN_REGS, tcReg,
             IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
 
     // Insert reads and writes around instruction sequences
@@ -570,9 +579,12 @@ void Trace(TRACE trace, VOID *v) {
         InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_LAST, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
-            // Uncomment to do *expensive* context-to-register comparisons
+#ifdef DEBUG_COMPARE_REGS
+            // Do *expensive* context-to-register comparisons; only works on single-threaded code, where registers stay in sync
+            // Read RAX first, as BBLs may not have used it
             InsertRegReads(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, {REG_RAX});
             INS_InsertCall(idxToIns[lastIdx], IPOINT_AFTER, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+#endif
         }
 
         // Write out partial regsets on taken branches
@@ -581,8 +593,10 @@ void Trace(TRACE trace, VOID *v) {
                 std::set<REG> inRegs, outRegs;
                 FindInOutRegs(idxToIns, firstIdx, idx, inRegs, outRegs);
                 InsertRegWrites(idxToIns[idx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, outRegs);
+#ifdef DEBUG_COMPARE_REGS
                 InsertRegReads(idxToIns[idx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, {REG_RAX});
                 INS_InsertCall(idxToIns[idx], IPOINT_TAKEN_BRANCH, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+#endif
             }
         }
     }
