@@ -42,6 +42,16 @@ namespace pmp {
 // Breaks Pin with -inline 0 (Pin tries to spill FS, craps itself)
 //#define DEBUG_COMPARE_REGS
 
+// We want to be able to have switchcalls before the first instruction of a
+// basic block, which thankfully we can do at low overhead with multi-versioned
+// traces. A switchcall before the first instruction of a trace starts in mode
+// 0, and indirect-jumps to mode 0 so long as we're switching among threads. To
+// avoid an infinite loop, the moment the switchcall returns the same thread,
+// it jumps to version 1, which does not have the initial jump test. All
+// version 1 traces ALWAYS immediately jump to mode 0.
+#define TRACE_VERSION_DEFAULT (0)
+#define TRACE_VERSION_NOJUMP  (1)
+
 
 template <typename ...Args>
 void info(const char* fmt, Args... args) {
@@ -68,6 +78,9 @@ std::array<ThreadContext, MAX_THREADS> contexts;
 // register. Allows single-instruction functions. This is the register index,
 // NOT the value of the pointer. When uncaptured, this register is nullptr.
 REG tcReg;
+
+// Scratch register used on switchcalls
+REG switchReg;
 
 // Callbacks, set on init
 TraceCallback traceCallback = nullptr;
@@ -417,13 +430,15 @@ ADDRINT IsTCRegInvalid(const ThreadContext* tc) {
 
 ThreadContext* SwitchHandler(ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
     assert(tc);
+    assert(nextThreadId == 0);
     WriteReg<REG_RIP>(tc, nextPC);
     assert(nextThreadId < MAX_THREADS);
-    //info("Switch @ 0x%lx", nextPC);
+    info("Switch @ 0x%lx", nextPC);
     return &contexts[nextThreadId];
 }
 
 ADDRINT GetPC(const ThreadContext* tc) {
+    info("GetPC %lx", ReadReg<REG_RIP>(tc));
     return ReadReg<REG_RIP>(tc);
 }
 
@@ -458,8 +473,8 @@ void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t 
     //for (REG r : inRegs) outRegs.insert(r);
 
     // FIXME: Always read and write RAX as a quick patch to paper over the fact that it's sometimes not caught. Won't work with multiple threads...
-    inRegs.insert(REG_RAX);
-    outRegs.insert(REG_RAX);
+    //inRegs.insert(REG_RAX);
+    //outRegs.insert(REG_RAX);
 
     // FIXME: Can't deal with segment regs this way, they cause violations with -inline 0?
 }
@@ -537,7 +552,8 @@ void Trace(TRACE trace, VOID *v) {
             curStart = curEnd + 1;
         }
 
-        if (hasSwitch) break;
+        // Comment to instrument whole traces (wasteful if switches are actually taken)
+        //if (hasSwitch) break;
      
         curEnd++;
     }
@@ -564,7 +580,7 @@ void Trace(TRACE trace, VOID *v) {
     INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)IsTCRegInvalid, IARG_REG_VALUE, tcReg,
             IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
     INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard,
-            IARG_THREAD_ID, /*IARG_CONST_CONTEXT*/ IARG_CONTEXT, IARG_RETURN_REGS, tcReg,
+            IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_RETURN_REGS, tcReg,
             IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
 
     // Insert reads and writes around instruction sequences
@@ -581,8 +597,6 @@ void Trace(TRACE trace, VOID *v) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
 #ifdef DEBUG_COMPARE_REGS
             // Do *expensive* context-to-register comparisons; only works on single-threaded code, where registers stay in sync
-            // Read RAX first, as BBLs may not have used it
-            InsertRegReads(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, {REG_RAX});
             INS_InsertCall(idxToIns[lastIdx], IPOINT_AFTER, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
 #endif
         }
@@ -594,7 +608,6 @@ void Trace(TRACE trace, VOID *v) {
                 FindInOutRegs(idxToIns, firstIdx, idx, inRegs, outRegs);
                 InsertRegWrites(idxToIns[idx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, outRegs);
 #ifdef DEBUG_COMPARE_REGS
-                InsertRegReads(idxToIns[idx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, {REG_RAX});
                 INS_InsertCall(idxToIns[idx], IPOINT_TAKEN_BRANCH, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
 #endif
             }
@@ -603,12 +616,45 @@ void Trace(TRACE trace, VOID *v) {
     
     // Insert switchpoint handlers
     auto insertSwitchHandler = [&](uint32_t idx, IPOINT ipoint) {
+#if 0
         assert(idx > 0 || ipoint != IPOINT_BEFORE);
-        assert(ipoint == IPOINT_BEFORE); // for nextPC...
+        //assert(ipoint == IPOINT_BEFORE); // for nextPC...
         // NOTE: Do the calls and indirect jump come out in the same order? We might have to tweak the switchpoint priority
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP/*, IARG_FALLTHROUGH_ADDR*/, IARG_REG_VALUE, REG_RAX, IARG_RETURN_REGS, tcReg, IARG_END);
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, REG_RAX, IARG_END);
-        INS_InsertIndirectJump(idxToIns[idx], ipoint, REG_RAX);
+        // IPOINT_BEFORE -> REG_RIP works
+        // IPOINT_AFTER -> FT_ARG??
+        assert(ipoint == IPOINT_AFTER);
+        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, /*IARG_REG_VALUE, REG_RIP*/ IARG_FALLTHROUGH_ADDR, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
+        //INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RAX>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, REG_RAX, IARG_END);
+        if (ipoint != IPOINT_TAKEN_BRANCH) {
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertIndirectJump(idxToIns[idx+1], IPOINT_BEFORE, switchReg);
+            //if (idx)
+        } else {
+            // Can't put a jump between traces, let's see if we can modify RIP
+            //INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, REG_RIP, IARG_END);
+        }
+#endif
+        /* NOTE: Only IPOINT_BEFORE works for now:
+         *
+         * - To get IPOINT_AFTER to run, SwitchHandler needs the fallthrough
+         *   address; but even then the main problem is the indirect jump is
+         *   inserted out of order with IPOINT_AFTER. IndirectJump does not
+         *   carry a call order, and the standard solution from other pintools
+         *   seems to be to insert it before the next instruction, or after the
+         *   next instruction and then delete the instruction :). We could do
+         *   this in fact... if we ever need IPOINT_AFTER.
+         *
+         * - IPOINT_TAKEN_BRANCH does. not. work. You can't inject an indirect
+         *   branch and can't change REG_RIP between traces (wouldn't that be
+         *   nice). If we need it, we can define a new trace version that
+         *   simply starts with an indirect branch, so that we simply delay the
+         *   jump to the next instruction. This would pollute the code cache
+         *   quite a bit, but should work.
+         */
+        if (ipoint != IPOINT_BEFORE) panic("Switchcalls only support IPOINT_BEFORE for now (can be fixed)");
+        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
+        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+        INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
     };
     
     for (uint32_t idx = 0; idx < traceInstrs; idx++) {
@@ -629,9 +675,9 @@ void Trace(TRACE trace, VOID *v) {
         }
     }
     
-    for (uint32_t idx = 0; idx < traceInstrs; idx++) {
+    /*for (uint32_t idx = 0; idx < traceInstrs; idx++) {
         INS_InsertCall(idxToIns[idx], IPOINT_BEFORE, (AFUNPTR)PrintIns, IARG_ADDRINT, INS_Address(idxToIns[idx]), IARG_END);
-    }
+    }*/
 
     // TODO: Syscall breakup code. 
 }
@@ -712,6 +758,7 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, T
     uncaptureCallback = uncaptureCb;
     
     tcReg = PIN_ClaimToolRegister();
+    switchReg = PIN_ClaimToolRegister();
     TRACE_AddInstrumentFunction(Trace, 0);
     PIN_AddThreadStartFunction(ThreadStart, 0);
     PIN_AddThreadFiniFunction(ThreadFini, 0);
@@ -762,6 +809,11 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
 REG __getContextReg() {
     assert(traceCallback);  // o/w not initialized
     return tcReg;
+}
+
+REG __getSwitchReg() {
+    assert(traceCallback);  // o/w not initialized
+    return switchReg;
 }
 
 }  // namespace pmp

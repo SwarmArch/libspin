@@ -84,10 +84,13 @@ void trace(TRACE trace, pmp::TraceInfo& pt) {
         }
 
         INS tailIns = BBL_InsTail(bbl);
+#if 1
         if (INS_HasFallThrough(tailIns) && BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
             pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
                     IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
-        }/*
+        }
+#endif
+        /*
         if (INS_IsBranchOrCall(tailIns) || INS_IsRet(tailIns)) {
             pt.insertSwitchCall(tailIns, IPOINT_TAKEN_BRANCH, (AFUNPTR) countInstrsAndSwitch,
                     IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
@@ -95,6 +98,17 @@ void trace(TRACE trace, pmp::TraceInfo& pt) {
 
         pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
                 IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));*/
+#if 0
+        if (INS_HasFallThrough(tailIns) && BBL_InsHead(bbl) != tailIns) {
+            pt.insertSwitchCall(tailIns, IPOINT_AFTER, (AFUNPTR) countInstrsAndSwitch,
+                    IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+        }
+
+        if (INS_IsBranchOrCall(tailIns) || INS_IsRet(tailIns)) {
+            //pt.insertSwitchCall(tailIns, IPOINT_TAKEN_BRANCH, (AFUNPTR) countInstrsAndSwitch,
+            //        IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+        }
+#endif
     }
 }
 

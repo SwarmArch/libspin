@@ -40,6 +40,10 @@ namespace pmp {
 
     typedef std::vector< std::tuple<INS, IPOINT> > CallpointVector;
 
+    // Internal methods --- used by IARG macros
+    REG __getContextReg();
+    REG __getSwitchReg();
+
     // Instrumentation: all analysis functions must be registered through this interface
     class TraceInfo {
         private:
@@ -56,7 +60,7 @@ namespace pmp {
             template <typename ...Args>
             void insertSwitchCall(INS ins, IPOINT ipoint, AFUNPTR func, Args... args) {
                 switchpoints.push_back(std::make_tuple(ins, ipoint));
-                INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, REG_RAX /* jump target */, IARG_CALL_ORDER, CALL_ORDER_DEFAULT-1, IARG_END);
+                INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, __getSwitchReg() /*jump target*/, /*IARG_CALL_ORDER, CALL_ORDER_DEFAULT-1,*/ IARG_END);
             }
 
             friend void Trace(TRACE trace, VOID* v);
@@ -72,9 +76,6 @@ namespace pmp {
     ThreadId getThreadId(const ThreadContext* tc);
     uint64_t getReg(const ThreadContext* tc, uint32_t reg);
     void setReg(ThreadContext* tc, uint32_t reg, uint64_t val);
-
-    // Internal method --- used by IARG macros
-    REG __getContextReg();
 };
 
 
