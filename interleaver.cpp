@@ -85,7 +85,7 @@ void trace(TRACE trace, pmp::TraceInfo& pt) {
 
         INS tailIns = BBL_InsTail(bbl);
 #if 1
-        if (INS_HasFallThrough(tailIns) && BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
+        if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
             pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
                     IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
         }

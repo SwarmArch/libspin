@@ -442,6 +442,17 @@ ADDRINT GetPC(const ThreadContext* tc) {
     return ReadReg<REG_RIP>(tc);
 }
 
+// These are used for switchcall instrumentation
+ADDRINT CheckArgsMatch(ADDRINT tc, ADDRINT sw) {
+    return (tc == sw)? 1 : sw;
+}
+
+// Seems silly? Pin inlines, resulting in single-instruction register copy
+ADDRINT ReturnArg(ADDRINT arg) {
+    return arg;
+}
+
+
 void FindInOutRegs(INS ins, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     for (uint32_t i = 0; i < INS_MaxNumRRegs(ins); i++) {
         REG reg = INS_RegR(ins, i);
@@ -484,9 +495,6 @@ void PrintIns(ADDRINT pc) {
 }
 
 void Trace(TRACE trace, VOID *v) {
-    TraceInfo pt;
-    traceCallback(trace, pt);
-    
     // Order the trace's instructions
     std::vector<INS> idxToIns;
     for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
@@ -494,6 +502,12 @@ void Trace(TRACE trace, VOID *v) {
             idxToIns.push_back(ins);
         }
     }
+
+    TraceInfo pt;
+    pt.firstIns = idxToIns[0];
+    pt.skipLeadingSwitchCall = (TRACE_Version(trace) == TRACE_VERSION_NOJUMP);
+    traceCallback(trace, pt);
+
     uint32_t traceInstrs = idxToIns.size();
     std::map<INS, uint32_t> insToIdx;
     for (uint32_t i = 0; i < traceInstrs; i++) insToIdx[idxToIns[i]] = i;
@@ -528,9 +542,9 @@ void Trace(TRACE trace, VOID *v) {
     findIPoints(pt.callpoints, callIPoints);
     findIPoints(pt.switchpoints, switchIPoints);
 
-    if (switchIPoints[0].before == true) {
+    /*if (switchIPoints[0].before == true) {
         panic("Cannot set a switchpoint at the start of a basic block (IPOINT_BEFORE first instruction)");
-    }
+    }*/
 
     // Find atomic instruction sequences (just looking at before/after points;
     // we handle taken branches differently)
@@ -559,6 +573,7 @@ void Trace(TRACE trace, VOID *v) {
     }
 
 #if 1
+    info("trace ver %d", TRACE_Version(trace));
     for (auto seq : insSeqs) {
         info(" seq: %d-%d", std::get<0>(seq), std::get<1>(seq));
     }
@@ -652,9 +667,33 @@ void Trace(TRACE trace, VOID *v) {
          *   quite a bit, but should work.
          */
         if (ipoint != IPOINT_BEFORE) panic("Switchcalls only support IPOINT_BEFORE for now (can be fixed)");
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
-        INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
+        if (idx > 0) {
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
+        } else if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
+            // Save new tc to switchReg
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            
+            // Compare, return 1 on switchReg if they match (ie if we're not switching threads), otherwise leave switchReg untouched
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)CheckArgsMatch, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+
+            // Switch to version 1 if switchReg == 1 (note theis overload of switchReg is OK because no valid tc address will be 1-aligned
+            INS_InsertVersionCase(idxToIns[idx], switchReg, 1, TRACE_VERSION_NOJUMP, IARG_END);
+
+            // Otherwise, test failed, actually write tcReg and do the jump
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReturnArg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
+        } else {
+            assert(TRACE_Version(trace) == TRACE_VERSION_NOJUMP);
+            // Immediately go back to version 0
+            for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
+                BBL_SetTargetVersion(bbl, TRACE_VERSION_DEFAULT);
+            }
+
+            // ... and that's it. This'll just run the first instruction without the switchcall
+        }
     };
     
     for (uint32_t idx = 0; idx < traceInstrs; idx++) {
