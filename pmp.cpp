@@ -30,6 +30,7 @@
 #include <assert.h>
 #include <set>
 #include <map>
+#include <unistd.h>
 
 #include "context.h"
 #include "pmp.h"
@@ -417,6 +418,7 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
 
 ThreadContext* TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     info("[%d] In TraceGuard, RIP 0x%lx", tid, PIN_GetContextReg(ctxt, REG_RIP));
+    if (tid) while(true) usleep(100);
     return &contexts[tid];
 }
 
@@ -430,15 +432,14 @@ ADDRINT IsTCRegInvalid(const ThreadContext* tc) {
 
 ThreadContext* SwitchHandler(ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
     assert(tc);
-    assert(nextThreadId == 0);
     WriteReg<REG_RIP>(tc, nextPC);
     assert(nextThreadId < MAX_THREADS);
-    info("Switch @ 0x%lx", nextPC);
+    //info("Switch @ 0x%lx", nextPC);
     return &contexts[nextThreadId];
 }
 
 ADDRINT GetPC(const ThreadContext* tc) {
-    info("GetPC %lx", ReadReg<REG_RIP>(tc));
+    //info("GetPC %lx", ReadReg<REG_RIP>(tc));
     return ReadReg<REG_RIP>(tc);
 }
 
@@ -572,7 +573,7 @@ void Trace(TRACE trace, VOID *v) {
         curEnd++;
     }
 
-#if 1
+#if 0
     info("trace ver %d", TRACE_Version(trace));
     for (auto seq : insSeqs) {
         info(" seq: %d-%d", std::get<0>(seq), std::get<1>(seq));
@@ -631,24 +632,6 @@ void Trace(TRACE trace, VOID *v) {
     
     // Insert switchpoint handlers
     auto insertSwitchHandler = [&](uint32_t idx, IPOINT ipoint) {
-#if 0
-        assert(idx > 0 || ipoint != IPOINT_BEFORE);
-        //assert(ipoint == IPOINT_BEFORE); // for nextPC...
-        // NOTE: Do the calls and indirect jump come out in the same order? We might have to tweak the switchpoint priority
-        // IPOINT_BEFORE -> REG_RIP works
-        // IPOINT_AFTER -> FT_ARG??
-        assert(ipoint == IPOINT_AFTER);
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, /*IARG_REG_VALUE, REG_RIP*/ IARG_FALLTHROUGH_ADDR, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
-        //INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RAX>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, REG_RAX, IARG_END);
-        if (ipoint != IPOINT_TAKEN_BRANCH) {
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
-            INS_InsertIndirectJump(idxToIns[idx+1], IPOINT_BEFORE, switchReg);
-            //if (idx)
-        } else {
-            // Can't put a jump between traces, let's see if we can modify RIP
-            //INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, REG_RIP, IARG_END);
-        }
-#endif
         /* NOTE: Only IPOINT_BEFORE works for now:
          *
          * - To get IPOINT_AFTER to run, SwitchHandler needs the fallthrough
@@ -731,8 +714,9 @@ void SyscallEnter(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
 void SyscallExit(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
     //info("syscall exit");
     // dsm: The syscall might have changed ANYTHING. Do a full context write.
-    ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);
-    assert(tc);
+    /*ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);
+    assert(tc);*/
+    ThreadContext* tc = &contexts[tid];
     InitContext(tc, ctxt);
 }
 
@@ -769,7 +753,7 @@ ThreadContext* Capture(THREADID tid, CONTEXT* ctxt) {
 void ThreadStart(THREADID tid, CONTEXT* ctxt, INT32 flags, VOID* v) {
     info("Thread %d started", tid);
     ThreadContext* tc = &contexts[tid];
-    PIN_SetContextReg(ctxt, tcReg, (ADDRINT)tc);
+    PIN_SetContextReg(ctxt, tcReg, /*(ADDRINT)tc*/(ADDRINT)nullptr);
     InitContext(tc, ctxt);
 
     // HACK (dsm): For whatever reason, Pin does not seem to be fully
