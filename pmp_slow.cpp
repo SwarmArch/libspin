@@ -27,7 +27,6 @@
 #include <string>
 
 #include <iostream>
-#include <assert.h>
 #include <set>
 #include <map>
 #include <sstream>
@@ -38,8 +37,13 @@
 #error "You must compile this file with PMP_SLOW"
 #endif
 
+
+#include "assert.h"
 #include "pmp.h"
 #include "log.h"
+
+//#define DEBUG(args...)
+#define DEBUG(args...) info(args)
 
 namespace pmp {
 
@@ -47,7 +51,7 @@ namespace pmp {
 #define MAX_THREADS 2048
 std::array<CONTEXT, MAX_THREADS> contexts;
 
-// FIXME: Shared with pmp.cpp!! Move to common point.
+// FIXME: Shared with pmp.cpp!! Move to common file.
 enum ThreadState  {
     UNCAPTURED, // Out in a syscall or other point out of our control. Will trip a capture point when it comes back to Pin; will trip before any other instrumentation function.
     IDLE,       // Runnable but not active
@@ -61,7 +65,7 @@ enum ThreadState  {
 // Executor state (all strictly protected by executorMutex)
 std::array<ThreadState, MAX_THREADS> threadStates;
 std::array<std::mutex, MAX_THREADS> waitLocks;
-uint32_t executorTid;
+volatile uint32_t executorTid;  // volatile b/c it's speculatively checked outside of a critical section
 uint32_t curTid;
 uint32_t capturedThreads;
 bool executorInSyscall;
@@ -99,16 +103,28 @@ ThreadCallback threadEndCallback = nullptr;
 /* Capture, uncapture, and executor handling */
 
 void ThreadStart(THREADID tid, CONTEXT* ctxt, INT32 flags, VOID* v) {
+    executorMutex.lock();
     info("Thread %d started", tid);
     threadStartCallback(tid);
     assert(threadStates[tid] == UNCAPTURED);
     PIN_SetContextReg(ctxt, executorReg, 0);  // will be captured immediately
+    executorMutex.unlock();
 }
 
 void ThreadFini(THREADID tid, const CONTEXT* ctxt, INT32 code, VOID* v) {
+    executorMutex.lock();
     info("Thread %d finished", tid);
-    assert(threadStates[tid] == UNCAPTURED);
+    if (threadStates[tid] == RUNNING) {
+        assert(capturedThreads == 1);
+        // This is the last thread, nothing to do. We do not call
+        // uncaptureCallback, but the tool can detect termination by seeing the
+        // thread count go to 0.
+        // FIXME: Race between thread creation and exit?
+    } else {
+        assert(threadStates[tid] == UNCAPTURED);
+    }
     threadEndCallback(tid);
+    executorMutex.unlock();
 }
 
 /* Tracing sequence*/
@@ -116,8 +132,13 @@ void ThreadFini(THREADID tid, const CONTEXT* ctxt, INT32 code, VOID* v) {
 // Helper method for guards. Must be called with executorMutex held
 void UncaptureAndSwitch() {
     uint64_t nextTid = uncaptureCallback(curTid, (ThreadContext*)&contexts[curTid]);
+    if (nextTid >= MAX_THREADS) panic("Switchcall returned invalid tid %d", nextTid);
+    if (threadStates[nextTid] != IDLE) {
+        panic("Switchcall returned tid %d, which is not IDLE (state[%d] = %d, curTid = %d executorTid = %d)",
+                nextTid, nextTid, threadStates[nextTid], curTid, executorTid);
+    }
+    
     capturedThreads--;
-    assert(nextTid < MAX_THREADS);
     assert(threadStates[curTid] == RUNNING);
     threadStates[curTid] = UNCAPTURED;
     curTid = nextTid;
@@ -132,6 +153,11 @@ uint64_t RunTraceGuard(uint64_t executor) {
 
 // Runs only if we're coming back from a syscall
 void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
+    if (!RunTraceGuard(PIN_GetContextReg(ctxt, executorReg))) return;
+    
+    DEBUG("[%d] In TraceGuard() (curTid %d rip 0x%lx er %d) [%d %d %d]", tid, curTid,
+            PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, executorReg),
+            threadStates[0], threadStates[1], threadStates[2]);
     executorMutex.lock();
     PIN_SaveContext(ctxt, &contexts[tid]);
     
@@ -141,7 +167,11 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         assert(executorTid == tid);
         assert(curTid == tid);
         assert(capturedThreads == 1);
+        executorInSyscall = false;
+        DEBUG("[%d] TG: Single thread, becoming executor", tid);
+        executorMutex.unlock();
         PIN_SetContextReg(&contexts[tid], executorReg, 1);
+        //PIN_SetContextReg(ctxt, executorReg, 1);
         PIN_ExecuteAt(&contexts[tid]);
     }
 
@@ -151,6 +181,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     threadStates[tid] = IDLE;
 
     if (capturedThreads == 1) {
+        DEBUG("[%d] TG: Only captured thread", tid);
         // We're the first! Make us run
         threadStates[tid] = RUNNING;
         assert(curTid == -1u);
@@ -158,6 +189,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     }
 
     if (executorInSyscall) {
+        DEBUG("[%d] TG: Executor is in syscall", tid);
         assert(curTid == executorTid);
         assert(capturedThreads == 2);  // the non-uncaptured executor and us
         // Do delayed uncapture
@@ -173,6 +205,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         executorMutex.lock();
         if (threadStates[tid] == UNCAPTURED) {
             // Take syscall
+            DEBUG("[%d] TG: Wakeup, taking own syscall", tid);
             executorMutex.unlock();
             PIN_SetContextReg(&contexts[tid], executorReg, 0);
             PIN_ExecuteAt(&contexts[tid]);
@@ -182,7 +215,10 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
             // thread could have been woken up to claim executor, but a thread
             // that came out of a syscall got it first. Thus waking up does not
             // automatically mean executorTid == -1u, so we check.
+            DEBUG("[%d] TG: Wakeup to claim executor", tid);
             break;
+        } else {
+            DEBUG("[%d] TG: Spurious wakeup", tid);
         }
     }
 
@@ -191,6 +227,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     // Become executor
     executorTid = tid;
     assert(curTid < MAX_THREADS);
+    DEBUG("[%d] TG: Becoming executor, (curTid = %d, capturedThreads = %d)", tid, curTid, capturedThreads);
     executorMutex.unlock();
     PIN_SetContextReg(&contexts[curTid], executorReg, 1);
     PIN_ExecuteAt(&contexts[curTid]);
@@ -202,6 +239,9 @@ uint64_t RunSyscallGuard(uint64_t executor) {
 
 void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     executorMutex.lock();
+    DEBUG("[%d] In SyscallGuard() (curTid %d rip 0x%lx er %d)", tid, curTid,
+            PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, executorReg));
+ 
     assert(executorTid == tid);
     PIN_SaveContext(ctxt, &contexts[curTid]);
 
@@ -273,10 +313,10 @@ void Trace(TRACE trace, VOID *v) {
     // Syscall guard
     for (INS ins : idxToIns) {
         if (INS_IsSyscall(ins)) {
-            INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)RunSyscallGuard,
+            INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)RunSyscallGuard,
                     IARG_REG_VALUE, executorReg,
                     IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
-            INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)SyscallGuard,
+            INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SyscallGuard,
                     IARG_THREAD_ID, IARG_CONST_CONTEXT, 
                     IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
         }

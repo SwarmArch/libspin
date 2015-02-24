@@ -38,44 +38,57 @@ void fini(int tid, void* dummy) {
 }
 
 // Used to round-robin through threads
-std::vector<uint32_t> threadVector;
+std::deque<uint32_t> threadQueue;
 
 // Forced-switch handling due to a syscall
 uint32_t uncapture(pmp::ThreadId tid, pmp::ThreadContext* tc) {
-/*    assert(!threadQueue.empty());  // pmp should not call this with a single thread
+    assert(!threadQueue.empty());  // pmp should not call this with a single thread
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
-    return next;*/
-    return -1; //FIXME
+    printf("Uncapture of tid %d, moving to %d", tid, next);
+    return next;
 }
 
 void capture(pmp::ThreadId tid) {
-    //threadQueue.push_back(tid);
+    threadQueue.push_back(tid);
 }
 
 void threadStart(pmp::ThreadId tid) {
-    threadVector.push_back(tid);
     threadStartCount++;
     printf("interleaver: threadStart\n");
 }
 
 void threadEnd(pmp::ThreadId tid) {
     threadEndCount++;
+    printf("interleaver: threadEnd\n");
+    if (threadStartCount == threadEndCount) {
+        printf("interleaver: done\n");
+    }
 }
 
 
 void countLoad() {
-    printf("load\n");
+    //printf("load\n");
     loadCount++;
 }
+
+bool shouldSwitch;
 
 uint32_t countInstrsAndSwitch(const pmp::ThreadContext* tc, uint32_t instrs) {
     insCount += instrs;
     /*threadQueue.push_back(pmp::getThreadId(tc));
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();*/
-    uint32_t next = 0; //threadVector[rand() % threadVector.size()];
+    //uint32_t next = 0; //threadVector[rand() % threadVector.size()];
     //printf("switching to %d\n", next);
+    uint32_t next = pmp::getCurThreadId();
+    if (shouldSwitch) {
+        threadQueue.push_back(next);
+        next = threadQueue.front();
+        threadQueue.pop_front();
+        //printf("switching to %d (%ld)\n", next, threadQueue.size());
+    }
+    shouldSwitch = !shouldSwitch;
     return next;
 }
 
