@@ -31,13 +31,12 @@
 #include <map>
 #include <sstream>
 #include <unistd.h>
-#include <mutex>
 
 #ifndef PMP_SLOW
 #error "You must compile this file with PMP_SLOW"
 #endif
 
-
+#include "mutex.h"
 #include "assert.h"
 #include "pmp.h"
 #include "log.h"
@@ -64,12 +63,12 @@ enum ThreadState  {
 
 // Executor state (all strictly protected by executorMutex)
 std::array<ThreadState, MAX_THREADS> threadStates;
-std::array<std::mutex, MAX_THREADS> waitLocks;
+std::array<mutex, MAX_THREADS> waitLocks;
 volatile uint32_t executorTid;  // volatile b/c it's speculatively checked outside of a critical section
 uint32_t curTid;
 uint32_t capturedThreads;
 bool executorInSyscall;
-std::mutex executorMutex;
+mutex executorMutex;
 
 uint64_t pad[64]; // FIXME
 
@@ -189,12 +188,13 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     }
 
     if (executorInSyscall) {
-        DEBUG("[%d] TG: Executor is in syscall", tid);
+        DEBUG("[%d] TG: Executor is in syscall, running delayed uncapture", tid);
         assert(curTid == executorTid);
         assert(capturedThreads == 2);  // the non-uncaptured executor and us
         // Do delayed uncapture
         UncaptureAndSwitch();
         executorTid = -1u;
+        executorInSyscall = false;
     }
 
     // If somebody else is the executor, wait until we're woken up, either
@@ -247,11 +247,12 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
 
     // Three possibilities:
     if (curTid != tid) {
-        // 1. We need to ship off this syscall and move on to another thread
+        // 1. We need to ship off this syscall and move on to another thread 
         assert(capturedThreads >= 2);  // both us and the tid we're running must be captured
         uint32_t wakeTid = curTid;
         UncaptureAndSwitch();  // changes curTid
         waitLocks[wakeTid].unlock();  // wake syscall taker
+        DEBUG("[%d] SG: Shipping syscall to real tid %d, running %d", tid, wakeTid, curTid);
         executorMutex.unlock();
         PIN_SetContextReg(&contexts[curTid], executorReg, 1);
         PIN_ExecuteAt(&contexts[curTid]);
@@ -270,11 +271,14 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
             assert(wakeTid != tid);
             UncaptureAndSwitch();  // changes curTid
             executorTid = -1u;
+            DEBUG("[%d] SG: Waking real tid %d, now running %d, and going to syscall", tid, wakeTid, curTid);
             waitLocks[wakeTid].unlock();  // wake new executor
         } else {
             // 3. We're the only captured thread, so if we uncaptured ourselves
             // the tool would run out of threads. Instead, let the first
             // captured thread do a delayed uncapture (or we'll do one)
+            DEBUG("[%d] SG: Delayed uncapture");
+            assert(!executorInSyscall);
             executorInSyscall = true;
         }
         
@@ -284,6 +288,33 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         PIN_ExecuteAt(&contexts[tid]);
     }
 }
+
+uint64_t NeedsSwitch(uint64_t nextTid) {
+    return (nextTid != curTid);
+}
+
+void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
+    uint32_t nextTid = PIN_GetContextReg(ctxt, switchReg);
+    assert(executorTid == tid);
+    assert(nextTid != curTid);  // o/w NeedsSwitch would prevent us from running
+    assert(curTid <= MAX_THREADS);
+    if (nextTid >= MAX_THREADS || threadStates[nextTid] != IDLE) {
+        panic("[%d] Switchcall returned invalid next tid %d (state %d)", tid,
+                nextTid, (nextTid < MAX_THREADS)? threadStates[nextTid] : -1);
+    }
+
+    PIN_SaveContext(ctxt, &contexts[curTid]);
+    PIN_SetContextReg(&contexts[curTid], executorReg, 0);
+
+    DEBUG("[%d] Switching %d -> %d", tid, curTid, nextTid);
+    assert(threadStates[curTid] == RUNNING);
+    threadStates[curTid] = IDLE;
+    curTid = nextTid;
+    threadStates[curTid] = RUNNING;
+    PIN_SetContextReg(&contexts[curTid], executorReg, 1);
+    PIN_ExecuteAt(&contexts[curTid]);
+}
+
 
 /* Tracing */
 
@@ -321,7 +352,29 @@ void Trace(TRACE trace, VOID *v) {
                     IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
         }
     }
+
+    // Switch handler
+    // NOTE: For now, this is just a post-handler, but if we find we need to
+    // modify the context in the switchcall (e.g., write arguments etc), we can
+    // save the context first, pass our internal copy to the switchcall, then
+    // run ExecuteAt.
+    for (auto iip : pt.switchpoints) {
+        INS ins = std::get<0>(iip);
+        IPOINT ipoint = std::get<1>(iip);
+        if (ipoint != IPOINT_BEFORE) {
+            // We can probably do AFTER and TAKEN_BRANCH in slow mode, but
+            // they're difficult to do in fast mode.
+            panic("Switchcalls only support IPOINT_BEFORE for now");
+        }
+        // Will be added right after the switchcall
+        INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)NeedsSwitch,
+                IARG_REG_VALUE, switchReg, IARG_END);
+        INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR) SwitchHandler,
+                IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_END);
+    }
 }
+
+
 
 #if 0
 void SyscallEnter(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {

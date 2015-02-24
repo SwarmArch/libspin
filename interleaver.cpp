@@ -45,12 +45,19 @@ uint32_t uncapture(pmp::ThreadId tid, pmp::ThreadContext* tc) {
     assert(!threadQueue.empty());  // pmp should not call this with a single thread
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
-    printf("Uncapture of tid %d, moving to %d", tid, next);
+    printf("Uncapture of tid %d, moving to %d\n", tid, next);
     return next;
 }
 
+bool somethingCaptured = false;
+
 void capture(pmp::ThreadId tid) {
-    threadQueue.push_back(tid);
+    printf("Capturing tid %d\n", tid);
+    if (!somethingCaptured) somethingCaptured = true;
+    else {
+        threadQueue.push_back(tid);
+        printf("%ld [%d...%d]\n", threadQueue.size(), threadQueue.front(), threadQueue.back());
+    }
 }
 
 void threadStart(pmp::ThreadId tid) {
@@ -86,7 +93,7 @@ uint32_t countInstrsAndSwitch(const pmp::ThreadContext* tc, uint32_t instrs) {
         threadQueue.push_back(next);
         next = threadQueue.front();
         threadQueue.pop_front();
-        //printf("switching to %d (%ld)\n", next, threadQueue.size());
+        if (next != threadQueue.back()) printf("switching to %d (%ld)\n", next, threadQueue.size());
     }
     shouldSwitch = !shouldSwitch;
     return next;

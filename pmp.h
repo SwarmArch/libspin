@@ -63,7 +63,7 @@ namespace pmp {
             template <typename ...Args>
             void insertCall(INS ins, IPOINT ipoint, AFUNPTR func, Args... args) {
                 callpoints.push_back(std::make_tuple(ins, ipoint));
-                INS_InsertCall(ins, ipoint, func, args..., IARG_END);
+                INS_InsertCall(ins, ipoint, func, args..., IARG_CALL_ORDER, CALL_ORDER_DEFAULT+1 /* always run after switchcalls and their internal handlers */, IARG_END);
             }
 
             template <typename ...Args>
