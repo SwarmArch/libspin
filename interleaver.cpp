@@ -41,7 +41,7 @@ void fini(int tid, void* dummy) {
 std::vector<uint32_t> threadVector;
 
 // Forced-switch handling due to a syscall
-uint32_t uncapture(pmp::ThreadContext* tc) {
+uint32_t uncapture(pmp::ThreadId tid, pmp::ThreadContext* tc) {
 /*    assert(!threadQueue.empty());  // pmp should not call this with a single thread
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
@@ -65,6 +65,7 @@ void threadEnd(pmp::ThreadId tid) {
 
 
 void countLoad() {
+    printf("load\n");
     loadCount++;
 }
 

@@ -40,7 +40,7 @@ namespace pmp {
     // Types
     struct ThreadContext;  // opaque by design
     typedef uint32_t ThreadId;
-    typedef ThreadId (*UncaptureCallback)(ThreadContext* tc);
+    typedef ThreadId (*UncaptureCallback)(ThreadId tid, ThreadContext* tc);
     typedef void (*ThreadCallback)(ThreadId);
 
     typedef std::vector< std::tuple<INS, IPOINT> > CallpointVector;
