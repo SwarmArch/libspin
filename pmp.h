@@ -26,10 +26,15 @@
 #include <vector>
 #include "pin/pin.H"
 
+#ifdef PMP_SLOW
+#define IARG_PMP_CONST_CONTEXT IARG_CONST_CONTEXT
+#define IARG_PMP_CONTEXT IARG_CONTEXT
+#else
 // Fast context macros to use in analysis routines
 // NOTE: We actually have no way to enforce constness, but have both defs to mirror Pin
 #define IARG_PMP_CONST_CONTEXT IARG_REG_VALUE, pmp::__getContextReg()
 #define IARG_PMP_CONTEXT IARG_REG_VALUE, pmp::__getContextReg()
+#endif
 
 namespace pmp {
     // Types
@@ -41,7 +46,9 @@ namespace pmp {
     typedef std::vector< std::tuple<INS, IPOINT> > CallpointVector;
 
     // Internal methods --- used by IARG macros
+#ifndef PMP_SLOW
     REG __getContextReg();
+#endif
     REG __getSwitchReg();
 
     // Instrumentation: all analysis functions must be registered through this interface
@@ -76,7 +83,7 @@ namespace pmp {
             ThreadCallback captureCb, UncaptureCallback uncaptureCb);
 
     // Context querying/manipulation methods
-    ThreadId getThreadId(const ThreadContext* tc);
+    ThreadId getCurThreadId();
     uint64_t getReg(const ThreadContext* tc, uint32_t reg);
     void setReg(ThreadContext* tc, uint32_t reg, uint64_t val);
 };

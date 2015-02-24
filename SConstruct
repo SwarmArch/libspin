@@ -27,14 +27,6 @@ env.Replace(CXX = 'g++-4.8 -O3')
 
 localenv = env.Clone()
 
-#pmp = localenv.SharedLibrary(
-#    target='libpmp.so',
-#    source="pmp.cpp")
-
-localenv.Program(
-    target='interleaver.so',
-    source=["interleaver.cpp", "pmp.cpp"],)
-
 localenv.Append(CPPFLAGS = ['-march=native', '-g', '-std=c++0x', '-Wall', '-Wno-unknown-pragmas',
     '-fomit-frame-pointer', '-fno-stack-protector', '-MMD', '-mavx',
     '-DBIGARRAY_MULTIPLIER=1', '-DUSING_XED', '-DTARGET_IA32E', '-DHOST_IA32E',
@@ -69,5 +61,17 @@ assert os.path.exists(pinverspath), pinverspath
 
 localenv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
     '-Wl,--version-script=' + pinverspath, '-Wl,-Bsymbolic', '-shared'])
+
+slowenv = localenv.Clone()
+slowenv["CPPFLAGS"] += ["-DPMP_SLOW"]
+slowenv["OBJSUFFIX"] = ".oslow"
+
+localenv.Program(
+    target='interleaver.so',
+    source=["interleaver.cpp", "pmp.cpp"],)
+
+slowenv.Program(
+    target='interleaver_slow.so',
+    source=["interleaver.cpp", "pmp_slow.cpp"],)
 
 

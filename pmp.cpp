@@ -238,8 +238,6 @@ ThreadCallback threadEndCallback = nullptr;
 /* Context read/write instrumentation */
 
 void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG> inRegs) {
-    bool readX87 = false;
-    
     for (REG r : inRegs) {
         if (r == REG_RIP) continue;  // RIP must be handled differently
 
