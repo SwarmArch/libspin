@@ -54,7 +54,7 @@ PINPATH = os.environ["PIN_HOME"] if "PIN_HOME" in os.environ \
 
 localenv.Append(CPPPATH =
     [os.path.join(PINPATH, dir) for dir in (
-    'extras/xed2-intel64/include',
+    'extras/xed-intel64/include',
     'source/include',
     # [mcj] the following directory is only needed because pin doesn't use
     # relative paths correctly... weird
@@ -62,7 +62,7 @@ localenv.Append(CPPPATH =
     'extras/components/include')])
 
 localenv.Append(LIBPATH = [os.path.join(PINPATH, dir) for dir in (
-    'extras/xed2-intel64/lib', 'intel64/lib', 'intel64/lib-ext')])
+    'extras/xed-intel64/lib', 'intel64/lib', 'intel64/lib-ext')])
 
 # [mcj] copied from zsim SConstruct
 # "Libdwarf is provided in static and shared variants, Ubuntu only provides
@@ -71,7 +71,7 @@ localenv.Append(LIBPATH = [os.path.join(PINPATH, dir) for dir in (
 # want to use the system libs as much as possible. So link directly to the
 # static version of libdwarf."
 localenv.Append(LIBS = ['pin', 'xed', 'elf', 'dl', 'rt',
-    File(os.path.join(PINPATH, 'intel64/lib-ext/libdwarf.a'))])
+    File(os.path.join(PINPATH, 'intel64/lib-ext/libpindwarf.a'))])
 
 pinverspath = os.path.join(PINPATH, 'source/include/pin/pintool.ver')
 assert os.path.exists(pinverspath), pinverspath

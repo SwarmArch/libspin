@@ -23,11 +23,13 @@ __thread uint32_t y;
 
 int main() {
     uint64_t x = 0;
-    __asm__ __volatile__(
-            "xchg %%rcx, %%rcx\n\t"\
-            "addq $1, %0\n\t"\
-            "xchg %%rdx, %%rdx"
-            : "=r"(x) : "r"(x) : "rcx", "rdx");
+    for (uint32_t i = 0; i < 200000000; i++) {
+        __asm__ __volatile__(
+                "xchg %%rcx, %%rcx\n\t"\
+                "addq $1, %0\n\t"\
+                "xchg %%rdx, %%rdx"
+                : "=r"(x) : "r"(x) : "rcx", "rdx");
+    }
     printf("x = %ld / %d\n", x, y);
     return 0;
 }

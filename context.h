@@ -117,17 +117,17 @@ inline void CopyToPinContext(ThreadContext* tc, CONTEXT* ctxt) {
 
 /* Read interface */
 
-template <REG r> ADDRINT ReadReg(const ThreadContext* tc);
+template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc);
 
-template <> ADDRINT ReadReg<REG_RFLAGS>(const ThreadContext* tc) {
+template <> inline ADDRINT ReadReg<REG_RFLAGS>(const ThreadContext* tc) {
     return tc->rflags;
 }
 
-template <> ADDRINT ReadReg<REG_RIP>(const ThreadContext* tc) {
+template <> inline ADDRINT ReadReg<REG_RIP>(const ThreadContext* tc) {
     return tc->rip;
 }
 
-template <REG r> ADDRINT ReadReg(const ThreadContext* tc) {
+template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc) {
     constexpr uint32_t i = (uint32_t)r;
     if (i >= REG_GR_BASE && i <= REG_GR_LAST) {
         return tc->gpRegs[i - REG_GR_BASE];
@@ -152,17 +152,17 @@ inline void ReadGenericReg(const ThreadContext* tc, REG r, PIN_REGISTER* val) {
 
 /* Write interface */
 
-template <REG r> void WriteReg(ThreadContext* tc, ADDRINT regVal);
+template <REG r> inline void WriteReg(ThreadContext* tc, ADDRINT regVal);
 
-template <> void WriteReg<REG_RFLAGS>(ThreadContext* tc, ADDRINT regVal) {
+template <> inline void WriteReg<REG_RFLAGS>(ThreadContext* tc, ADDRINT regVal) {
     tc->rflags = regVal;
 }
 
-template <> void WriteReg<REG_RIP>(ThreadContext* tc, ADDRINT regVal) {
+template <> inline void WriteReg<REG_RIP>(ThreadContext* tc, ADDRINT regVal) {
     tc->rip = regVal;
 }
 
-template <REG r> void WriteReg(ThreadContext* tc, ADDRINT regVal) {
+template <REG r> inline void WriteReg(ThreadContext* tc, ADDRINT regVal) {
     constexpr uint32_t i = (uint32_t)r;
     // NOTE: Userland does not write segment registers... but keeping for symmetry
     if (i >= REG_GR_BASE && i <= REG_GR_LAST) {

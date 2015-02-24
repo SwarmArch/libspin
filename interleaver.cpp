@@ -38,22 +38,23 @@ void fini(int tid, void* dummy) {
 }
 
 // Used to round-robin through threads
-std::deque<uint32_t> threadQueue;
+std::vector<uint32_t> threadVector;
 
 // Forced-switch handling due to a syscall
 uint32_t uncapture(pmp::ThreadContext* tc) {
-    assert(!threadQueue.empty());  // pmp should not call this with a single thread
+/*    assert(!threadQueue.empty());  // pmp should not call this with a single thread
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
-    return next;
+    return next;*/
+    return -1; //FIXME
 }
 
 void capture(pmp::ThreadId tid) {
-    threadQueue.push_back(tid);
+    //threadQueue.push_back(tid);
 }
 
 void threadStart(pmp::ThreadId tid) {
-    threadQueue.push_back(tid);
+    threadVector.push_back(tid);
     threadStartCount++;
     printf("interleaver: threadStart\n");
 }
@@ -69,10 +70,11 @@ void countLoad() {
 
 uint32_t countInstrsAndSwitch(const pmp::ThreadContext* tc, uint32_t instrs) {
     insCount += instrs;
-    threadQueue.push_back(pmp::getThreadId(tc));
+    /*threadQueue.push_back(pmp::getThreadId(tc));
     uint32_t next = threadQueue.front();
-    threadQueue.pop_front();
-    printf("switching to %d\n", next);
+    threadQueue.pop_front();*/
+    uint32_t next = 0; //threadVector[rand() % threadVector.size()];
+    //printf("switching to %d\n", next);
     return next;
 }
 
@@ -85,8 +87,9 @@ void trace(TRACE trace, pmp::TraceInfo& pt) {
 
         INS tailIns = BBL_InsTail(bbl);
 #if 1
-        if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
-            pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
+        //if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
+        if (!INS_Stutters(tailIns)) {
+         pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
                     IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
         }
 #endif

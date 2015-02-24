@@ -30,6 +30,7 @@
 #include <assert.h>
 #include <set>
 #include <map>
+#include <sstream>
 #include <unistd.h>
 
 #include "context.h"
@@ -314,7 +315,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
         // probably save and restore all ST or MM regs, or something like that.
         // JUST BAILING WILL BREAK X87 CODE
         // (but given how deprecated x87 FP is, will this really be an issue?)
-        if (r == REG_X87) continue;
+        //if (r == REG_X87) continue;
         fp = (AFUNPTR)ReadGenericReg;
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
     }
@@ -393,7 +394,7 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
         info("Generic RegWrite %s", REG_StringShort(r).c_str());
         
         // FIXME(dsm): See X87 comment above
-        if (r == REG_X87) continue;
+        //if (r == REG_X87) continue;
         fp = (AFUNPTR)WriteGenericReg;
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
     }
@@ -417,7 +418,7 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
 }
 
 ThreadContext* TraceGuard(THREADID tid, const CONTEXT* ctxt) {
-    info("[%d] In TraceGuard, RIP 0x%lx", tid, PIN_GetContextReg(ctxt, REG_RIP));
+    info("[%d] In TraceGuard, RIP 0x%lx ctxt 0x%lx", tid, PIN_GetContextReg(ctxt, REG_RIP), &contexts[tid]);
     if (tid) while(true) usleep(100);
     return &contexts[tid];
 }
@@ -431,9 +432,9 @@ ADDRINT IsTCRegInvalid(const ThreadContext* tc) {
 }
 
 ThreadContext* SwitchHandler(ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
-    assert(tc);
+    //assert(tc);
     WriteReg<REG_RIP>(tc, nextPC);
-    assert(nextThreadId < MAX_THREADS);
+    //assert(nextThreadId < MAX_THREADS);
     //info("Switch @ 0x%lx", nextPC);
     return &contexts[nextThreadId];
 }
@@ -483,16 +484,18 @@ void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t 
     // for now, do the simple thing and always read the regs written
     for (REG r : outRegs) inRegs.insert(r);
     //for (REG r : inRegs) outRegs.insert(r);
-
-    // FIXME: Always read and write RAX as a quick patch to paper over the fact that it's sometimes not caught. Won't work with multiple threads...
-    //inRegs.insert(REG_RAX);
-    //outRegs.insert(REG_RAX);
-
-    // FIXME: Can't deal with segment regs this way, they cause violations with -inline 0?
 }
 
 void PrintIns(ADDRINT pc) {
     //info(" 0x%lx", pc);
+}
+
+std::string RegSetToStr(const std::set<REG> regs) {
+    std::stringstream ss;
+    for (REG r : regs) {
+        ss << " " << REG_StringShort(r);
+    }
+    return ss.str();
 }
 
 void Trace(TRACE trace, VOID *v) {
@@ -573,10 +576,14 @@ void Trace(TRACE trace, VOID *v) {
         curEnd++;
     }
 
-#if 0
+#if 1
     info("trace ver %d", TRACE_Version(trace));
     for (auto seq : insSeqs) {
-        info(" seq: %d-%d", std::get<0>(seq), std::get<1>(seq));
+        uint32_t firstIdx = std::get<0>(seq);
+        uint32_t lastIdx = std::get<1>(seq);
+        std::set<REG> inRegs, outRegs;
+        FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
+        info(" seq: %d-%d in:%s out:%s", firstIdx, lastIdx, RegSetToStr(inRegs).c_str(), RegSetToStr(outRegs).c_str());
     }
     uint32_t maxInstr = std::get<1>(insSeqs[insSeqs.size()-1]);
     for (uint32_t idx = 0; idx < traceInstrs; idx++) {
@@ -593,11 +600,13 @@ void Trace(TRACE trace, VOID *v) {
 #endif
 
     // Insert the guard, predicated to reduce overheads (as it takes the context!)
-    INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)IsTCRegInvalid, IARG_REG_VALUE, tcReg,
-            IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
-    INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard,
-            IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_RETURN_REGS, tcReg,
-            IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+    if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
+        INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)IsTCRegInvalid, IARG_REG_VALUE, tcReg,
+                IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+        INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard,
+                IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_RETURN_REGS, tcReg,
+                IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+    }
 
     // Insert reads and writes around instruction sequences
     // Reads: Last thing before first instr in sequence
@@ -650,23 +659,27 @@ void Trace(TRACE trace, VOID *v) {
          *   quite a bit, but should work.
          */
         if (ipoint != IPOINT_BEFORE) panic("Switchcalls only support IPOINT_BEFORE for now (can be fixed)");
-        if (idx > 0) {
+        // FIXME: It seems that, to enforce a consistent set of checks, we
+        // should do the 0->1 jump all the time, not just at the start of the
+        // BBL. This way, we consistently run switchcalls once per successful
+        // enqueue.
+        /*if (idx > 0) {
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
-        } else if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
+        } else*/ if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
             // Save new tc to switchReg
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
             
             // Compare, return 1 on switchReg if they match (ie if we're not switching threads), otherwise leave switchReg untouched
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)CheckArgsMatch, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
 
-            // Switch to version 1 if switchReg == 1 (note theis overload of switchReg is OK because no valid tc address will be 1-aligned
+            // Switch to version 1 if switchReg == 1 (note this overload of switchReg is OK because no valid tc address will be 1-aligned
             INS_InsertVersionCase(idxToIns[idx], switchReg, 1, TRACE_VERSION_NOJUMP, IARG_END);
 
             // Otherwise, test failed, actually write tcReg and do the jump
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReturnArg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)/*GetPC*/ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
         } else {
             assert(TRACE_Version(trace) == TRACE_VERSION_NOJUMP);
@@ -709,6 +722,7 @@ void SyscallEnter(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
     ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);
     assert(tc);
     CopyToPinContext(tc, ctxt);
+    PIN_SetContextReg(ctxt, tcReg, (ADDRINT)tc);  // FIXME: Avoid spurious guards
 }
 
 void SyscallExit(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
