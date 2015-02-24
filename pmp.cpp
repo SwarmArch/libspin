@@ -238,6 +238,8 @@ ThreadCallback threadEndCallback = nullptr;
 /* Context read/write instrumentation */
 
 void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG> inRegs) {
+    bool readX87 = false;
+    
     for (REG r : inRegs) {
         if (r == REG_RIP) continue;  // RIP must be handled differently
 
@@ -308,14 +310,24 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
             continue;
         }
 
+        /* X87, God save the Queen
+         *
+         * X87 sucks, and Pin handling of X87 sucks even more (e.g., REG_X87 is
+         * a register that no APIs can access according to reg_ia32.PH, and the
+         * Get/SetRegval APIs don't work for ST0-7...)
+         *
+         * 1. Ignore REG_X87, this seems safe
+         * 2. ST0-7 ...??? If we can't pass by ref, reads we could do with
+         * GetContextFPState, but stores? Do we restore the whole FP state? And
+         * do that before all other reads, so that XMM reads work OK?
+         * This is complete madness, might as well use ExecuteAt at that point.
+         */
+        if (r == REG_X87) continue;
+        if (r >= REG_ST0 && r <= REG_ST7) continue;
+
         // Misc regs
         info("Generic RegRead %s", REG_StringShort(r).c_str());
         
-        // FIXME (dsm): Looks like REG_X87 == touching the FP stack. Should
-        // probably save and restore all ST or MM regs, or something like that.
-        // JUST BAILING WILL BREAK X87 CODE
-        // (but given how deprecated x87 FP is, will this really be an issue?)
-        //if (r == REG_X87) continue;
         fp = (AFUNPTR)ReadGenericReg;
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
     }
@@ -394,7 +406,9 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
         info("Generic RegWrite %s", REG_StringShort(r).c_str());
         
         // FIXME(dsm): See X87 comment above
-        //if (r == REG_X87) continue;
+        if (r == REG_X87) continue;
+        if (r >= REG_ST0 && r <= REG_ST7) continue;
+
         fp = (AFUNPTR)WriteGenericReg;
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
     }
