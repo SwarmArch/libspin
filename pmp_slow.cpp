@@ -41,8 +41,8 @@
 #include "pmp.h"
 #include "log.h"
 
-//#define DEBUG(args...)
-#define DEBUG(args...) info(args)
+#define DEBUG(args...)
+//#define DEBUG(args...) info(args)
 
 namespace pmp {
 
@@ -77,8 +77,8 @@ REG switchReg;
 
 // Callbacks, set on init
 TraceCallback traceCallback = nullptr;
+CaptureCallback captureCallback = nullptr;
 UncaptureCallback uncaptureCallback = nullptr;
-ThreadCallback captureCallback = nullptr;
 ThreadCallback threadStartCallback = nullptr;
 ThreadCallback threadEndCallback = nullptr;
 
@@ -145,7 +145,6 @@ void UncaptureAndSwitch() {
     threadStates[curTid] = RUNNING;
 }
 
-
 uint64_t RunTraceGuard(uint64_t executor) {
     return !executor;
 }
@@ -175,11 +174,12 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     }
 
     assert(threadStates[tid] == UNCAPTURED);
-    captureCallback(tid);
+    bool runsNext = (capturedThreads == 0);
+    captureCallback(tid, runsNext);
     capturedThreads++;
     threadStates[tid] = IDLE;
 
-    if (capturedThreads == 1) {
+    if (runsNext) {
         DEBUG("[%d] TG: Only captured thread", tid);
         // We're the first! Make us run
         threadStates[tid] = RUNNING;
@@ -277,7 +277,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
             // 3. We're the only captured thread, so if we uncaptured ourselves
             // the tool would run out of threads. Instead, let the first
             // captured thread do a delayed uncapture (or we'll do one)
-            DEBUG("[%d] SG: Delayed uncapture");
+            DEBUG("[%d] SG: Delayed uncapture", tid);
             assert(!executorInSyscall);
             executorInSyscall = true;
         }
@@ -295,6 +295,7 @@ uint64_t NeedsSwitch(uint64_t nextTid) {
 
 void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
     uint32_t nextTid = PIN_GetContextReg(ctxt, switchReg);
+    executorMutex.lock();
     assert(executorTid == tid);
     assert(nextTid != curTid);  // o/w NeedsSwitch would prevent us from running
     assert(curTid <= MAX_THREADS);
@@ -311,6 +312,7 @@ void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
     threadStates[curTid] = IDLE;
     curTid = nextTid;
     threadStates[curTid] = RUNNING;
+    executorMutex.unlock();
     PIN_SetContextReg(&contexts[curTid], executorReg, 1);
     PIN_ExecuteAt(&contexts[curTid]);
 }
@@ -390,7 +392,7 @@ void SyscallExit(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
 
 /* Public interface */
 
-void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, ThreadCallback captureCb, UncaptureCallback uncaptureCb) {
+void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, CaptureCallback captureCb, UncaptureCallback uncaptureCb) {
     for (auto& ts : threadStates) ts = UNCAPTURED;
     for (auto& wl : waitLocks) wl.lock();
     curTid = -1u;

@@ -22,11 +22,14 @@
 #include <stdint.h>
 #include "pmp.h"
 
+#include "mutex.h"
+
 uint64_t syscallCount = 0;
 uint64_t insCount = 0;
 uint64_t loadCount = 0;
 uint64_t threadStartCount = 0;
 uint64_t threadEndCount = 0;
+uint64_t switchCount = 0;
 
 void fini(int tid, void* dummy) {
     fprintf(stderr, "Interleaver tool finished, stats:\n");
@@ -34,29 +37,31 @@ void fini(int tid, void* dummy) {
     fprintf(stderr, " loads: %ld\n", loadCount);
     fprintf(stderr, " threads: %ld starts, %ld ends\n", threadStartCount, threadEndCount);
     fprintf(stderr, " syscalls: %ld\n", syscallCount);
+    fprintf(stderr, " switches: %ld\n", switchCount);
     fflush(stderr);
 }
 
 // Used to round-robin through threads
 std::deque<uint32_t> threadQueue;
+mutex queueMutex;
 
 // Forced-switch handling due to a syscall
 uint32_t uncapture(pmp::ThreadId tid, pmp::ThreadContext* tc) {
+    scoped_mutex sm(queueMutex);
     assert(!threadQueue.empty());  // pmp should not call this with a single thread
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
     printf("Uncapture of tid %d, moving to %d\n", tid, next);
+    switchCount++;
     return next;
 }
 
-bool somethingCaptured = false;
-
-void capture(pmp::ThreadId tid) {
+void capture(pmp::ThreadId tid, bool runsNext) {
     printf("Capturing tid %d\n", tid);
-    if (!somethingCaptured) somethingCaptured = true;
-    else {
+    if (!runsNext) {
+        scoped_mutex sm(queueMutex);
         threadQueue.push_back(tid);
-        printf("%ld [%d...%d]\n", threadQueue.size(), threadQueue.front(), threadQueue.back());
+        printf("Queued %d, q{%ld elems}[%d...%d]\n", tid, threadQueue.size(), threadQueue.front(), threadQueue.back());
     }
 }
 
@@ -90,10 +95,14 @@ uint32_t countInstrsAndSwitch(const pmp::ThreadContext* tc, uint32_t instrs) {
     //printf("switching to %d\n", next);
     uint32_t next = pmp::getCurThreadId();
     if (shouldSwitch) {
+        scoped_mutex sm(queueMutex);
         threadQueue.push_back(next);
         next = threadQueue.front();
         threadQueue.pop_front();
-        if (next != threadQueue.back()) printf("switching to %d (%ld)\n", next, threadQueue.size());
+        if (next != threadQueue.back()) {
+            //printf("switching to %d (%ld)\n", next, threadQueue.size());
+            switchCount++;
+        }
     }
     shouldSwitch = !shouldSwitch;
     return next;
