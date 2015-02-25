@@ -296,6 +296,7 @@ uint64_t NeedsSwitch(uint64_t nextTid) {
 void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
     uint32_t nextTid = PIN_GetContextReg(ctxt, switchReg);
     executorMutex.lock();
+    if (PIN_GetContextReg(ctxt, executorReg) != 1) panic("[%d] I was supposed to be the executor?? But it's %d", tid, executorTid);
     assert(executorTid == tid);
     assert(nextTid != curTid);  // o/w NeedsSwitch would prevent us from running
     assert(curTid <= MAX_THREADS);
@@ -331,7 +332,7 @@ void Trace(TRACE trace, VOID *v) {
 
     TraceInfo pt;
     pt.firstIns = idxToIns[0];
-    pt.skipLeadingSwitchCall = false;
+    pt.skipLeadingSwitchCall = INS_IsSyscall(pt.firstIns);
     traceCallback(trace, pt);
 
     if (!INS_IsSyscall(idxToIns[0])) {
@@ -368,6 +369,8 @@ void Trace(TRACE trace, VOID *v) {
             // they're difficult to do in fast mode.
             panic("Switchcalls only support IPOINT_BEFORE for now");
         }
+
+        if (ins == idxToIns[0] && INS_IsSyscall(ins)) continue;
         // Will be added right after the switchcall
         INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)NeedsSwitch,
                 IARG_REG_VALUE, switchReg, IARG_END);
