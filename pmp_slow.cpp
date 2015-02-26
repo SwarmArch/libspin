@@ -151,8 +151,7 @@ uint64_t RunTraceGuard(uint64_t executor) {
 
 // Runs only if we're coming back from a syscall
 void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
-    if (!RunTraceGuard(PIN_GetContextReg(ctxt, executorReg))) return;
-    
+    assert(PIN_GetContextReg(ctxt, executorReg) == 0);
     DEBUG("[%d] In TraceGuard() (curTid %d rip 0x%lx er %d) [%d %d %d]", tid, curTid,
             PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, executorReg),
             threadStates[0], threadStates[1], threadStates[2]);
@@ -169,7 +168,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         DEBUG("[%d] TG: Single thread, becoming executor", tid);
         executorMutex.unlock();
         PIN_SetContextReg(&contexts[tid], executorReg, 1);
-        //PIN_SetContextReg(ctxt, executorReg, 1);
+        PIN_SetContextReg(&contexts[tid], switchReg, curTid);
         PIN_ExecuteAt(&contexts[tid]);
     }
 
@@ -208,6 +207,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
             DEBUG("[%d] TG: Wakeup, taking own syscall", tid);
             executorMutex.unlock();
             PIN_SetContextReg(&contexts[tid], executorReg, 0);
+            PIN_SetContextReg(&contexts[tid], switchReg, -1);
             PIN_ExecuteAt(&contexts[tid]);
         } else if (executorTid == -1u) {
             // NOTE: Due to wakeups interleaving with uncaptures, we can have
@@ -230,6 +230,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     DEBUG("[%d] TG: Becoming executor, (curTid = %d, capturedThreads = %d)", tid, curTid, capturedThreads);
     executorMutex.unlock();
     PIN_SetContextReg(&contexts[curTid], executorReg, 1);
+    PIN_SetContextReg(&contexts[curTid], switchReg, curTid);
     PIN_ExecuteAt(&contexts[curTid]);
 }
 
@@ -255,6 +256,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         DEBUG("[%d] SG: Shipping syscall to real tid %d, running %d", tid, wakeTid, curTid);
         executorMutex.unlock();
         PIN_SetContextReg(&contexts[curTid], executorReg, 1);
+        PIN_SetContextReg(&contexts[curTid], switchReg, curTid);
         PIN_ExecuteAt(&contexts[curTid]);
     } else {
         // We ourselves need to take the syscall...
@@ -285,6 +287,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         executorMutex.unlock();
         // Take our syscall
         PIN_SetContextReg(&contexts[tid], executorReg, 0);
+        PIN_SetContextReg(&contexts[tid], switchReg, -1);
         PIN_ExecuteAt(&contexts[tid]);
     }
 }
@@ -307,6 +310,7 @@ void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
 
     PIN_SaveContext(ctxt, &contexts[curTid]);
     PIN_SetContextReg(&contexts[curTid], executorReg, 0);
+    PIN_SetContextReg(&contexts[curTid], switchReg, -1);
 
     DEBUG("[%d] Switching %d -> %d", tid, curTid, nextTid);
     assert(threadStates[curTid] == RUNNING);
@@ -315,6 +319,7 @@ void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
     threadStates[curTid] = RUNNING;
     executorMutex.unlock();
     PIN_SetContextReg(&contexts[curTid], executorReg, 1);
+    PIN_SetContextReg(&contexts[curTid], switchReg, curTid);
     PIN_ExecuteAt(&contexts[curTid]);
 }
 
@@ -379,20 +384,6 @@ void Trace(TRACE trace, VOID *v) {
     }
 }
 
-
-
-#if 0
-void SyscallEnter(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
-}
-
-void SyscallExit(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
-    //info("syscall exit");
-    // dsm: The syscall might have changed ANYTHING. Do a full context write.
-    /*ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);
-    assert(tc);*/
-}
-#endif
-
 /* Public interface */
 
 void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, CaptureCallback captureCb, UncaptureCallback uncaptureCb) {
@@ -415,13 +406,6 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     TRACE_AddInstrumentFunction(Trace, 0);
     PIN_AddThreadStartFunction(ThreadStart, 0);
     PIN_AddThreadFiniFunction(ThreadFini, 0);
-    //PIN_AddSyscallEntryFunction(SyscallEnter, 0);
-    //PIN_AddSyscallExitFunction(SyscallExit, 0);
-}
-
-ThreadId getCurThreadId() {
-    assert(curTid < MAX_THREADS);
-    return curTid;
 }
 
 uint64_t getReg(const ThreadContext* tc, REG reg) {

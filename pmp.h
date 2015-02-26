@@ -35,6 +35,7 @@
 #define IARG_PMP_CONST_CONTEXT IARG_REG_VALUE, pmp::__getContextReg()
 #define IARG_PMP_CONTEXT IARG_REG_VALUE, pmp::__getContextReg()
 #endif
+#define IARG_PMP_THREAD_ID IARG_REG_VALUE, pmp::__getSwitchReg()
 
 namespace pmp {
     // Types
@@ -84,7 +85,7 @@ namespace pmp {
             CaptureCallback captureCb, UncaptureCallback uncaptureCb);
 
     // Context querying/manipulation methods
-    ThreadId getCurThreadId();
+    // DEPRECATED ThreadId getCurThreadId();
     uint64_t getReg(const ThreadContext* tc, uint32_t reg);
     void setReg(ThreadContext* tc, uint32_t reg, uint64_t val);
 };

@@ -38,6 +38,7 @@ void fini(int tid, void* dummy) {
     fprintf(stderr, " threads: %ld starts, %ld ends\n", threadStartCount, threadEndCount);
     fprintf(stderr, " syscalls: %ld\n", syscallCount);
     fprintf(stderr, " switches: %ld\n", switchCount);
+    fprintf(stderr, " code cache size: %d bytes\n", CODECACHE_CodeMemUsed());
     fflush(stderr);
 }
 
@@ -86,14 +87,10 @@ void countLoad() {
 
 bool shouldSwitch;
 
-uint32_t countInstrsAndSwitch(const pmp::ThreadContext* tc, uint32_t instrs) {
+uint32_t countInstrsAndSwitch(pmp::ThreadId curTid, const pmp::ThreadContext* tc, uint32_t instrs) {
     insCount += instrs;
-    /*threadQueue.push_back(pmp::getThreadId(tc));
-    uint32_t next = threadQueue.front();
-    threadQueue.pop_front();*/
-    //uint32_t next = 0; //threadVector[rand() % threadVector.size()];
-    //printf("switching to %d\n", next);
-    uint32_t next = pmp::getCurThreadId();
+    //printf("switchcall, %d\n", curTid);
+    uint32_t next = curTid;
     if (shouldSwitch) {
         scoped_mutex sm(queueMutex);
         threadQueue.push_back(next);
@@ -120,7 +117,7 @@ void trace(TRACE trace, pmp::TraceInfo& pt) {
         //if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
         if (!INS_Stutters(tailIns)) {
          pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
-                    IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+                    IARG_PMP_THREAD_ID, IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
         }
 #endif
         /*

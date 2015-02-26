@@ -815,13 +815,6 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, T
     PIN_AddSyscallExitFunction(SyscallExit, 0);
 }
 
-ThreadId getThreadId(const ThreadContext* tc) {
-    assert(tc);
-    uint32_t tid = tc - &contexts[0];
-    assert(tid < MAX_THREADS);
-    return tid;
-}
-
 uint64_t getReg(const ThreadContext* tc, REG reg) {
     assert(tc);
     reg = REG_FullRegName(reg);
