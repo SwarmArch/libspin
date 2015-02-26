@@ -20,7 +20,7 @@
 #include <deque>
 #include <stdio.h>
 #include <stdint.h>
-#include "pmp.h"
+#include "spin.h"
 
 #include "mutex.h"
 
@@ -47,9 +47,9 @@ std::deque<uint32_t> threadQueue;
 mutex queueMutex;
 
 // Forced-switch handling due to a syscall
-uint32_t uncapture(pmp::ThreadId tid, pmp::ThreadContext* tc) {
+uint32_t uncapture(spin::ThreadId tid, spin::ThreadContext* tc) {
     scoped_mutex sm(queueMutex);
-    assert(!threadQueue.empty());  // pmp should not call this with a single thread
+    assert(!threadQueue.empty());  // spin should not call this with a single thread
     uint32_t next = threadQueue.front();
     threadQueue.pop_front();
     printf("Uncapture of tid %d, moving to %d\n", tid, next);
@@ -57,7 +57,7 @@ uint32_t uncapture(pmp::ThreadId tid, pmp::ThreadContext* tc) {
     return next;
 }
 
-void capture(pmp::ThreadId tid, bool runsNext) {
+void capture(spin::ThreadId tid, bool runsNext) {
     printf("Capturing tid %d\n", tid);
     if (!runsNext) {
         scoped_mutex sm(queueMutex);
@@ -66,12 +66,12 @@ void capture(pmp::ThreadId tid, bool runsNext) {
     }
 }
 
-void threadStart(pmp::ThreadId tid) {
+void threadStart(spin::ThreadId tid) {
     threadStartCount++;
     printf("interleaver: threadStart\n");
 }
 
-void threadEnd(pmp::ThreadId tid) {
+void threadEnd(spin::ThreadId tid) {
     threadEndCount++;
     printf("interleaver: threadEnd\n");
     if (threadStartCount == threadEndCount) {
@@ -87,7 +87,7 @@ void countLoad() {
 
 bool shouldSwitch;
 
-uint32_t countInstrsAndSwitch(pmp::ThreadId curTid, const pmp::ThreadContext* tc, uint32_t instrs) {
+uint32_t countInstrsAndSwitch(spin::ThreadId curTid, const spin::ThreadContext* tc, uint32_t instrs) {
     insCount += instrs;
     //printf("switchcall, %d\n", curTid);
     uint32_t next = curTid;
@@ -105,7 +105,7 @@ uint32_t countInstrsAndSwitch(pmp::ThreadId curTid, const pmp::ThreadContext* tc
     return next;
 }
 
-void trace(TRACE trace, pmp::TraceInfo& pt) {
+void trace(TRACE trace, spin::TraceInfo& pt) {
     for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
         for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
             if (INS_IsMemoryRead(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
@@ -117,38 +117,38 @@ void trace(TRACE trace, pmp::TraceInfo& pt) {
         //if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
         if (!INS_Stutters(tailIns)) {
          pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
-                    IARG_PMP_THREAD_ID, IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+                    IARG_SPIN_THREAD_ID, IARG_SPIN_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
         }
 #endif
         /*
         if (INS_IsBranchOrCall(tailIns) || INS_IsRet(tailIns)) {
             pt.insertSwitchCall(tailIns, IPOINT_TAKEN_BRANCH, (AFUNPTR) countInstrsAndSwitch,
-                    IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+                    IARG_SPIN_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
         }
 
         pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
-                IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));*/
+                IARG_SPIN_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));*/
 #if 0
         if (INS_HasFallThrough(tailIns) && BBL_InsHead(bbl) != tailIns) {
             pt.insertSwitchCall(tailIns, IPOINT_AFTER, (AFUNPTR) countInstrsAndSwitch,
-                    IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+                    IARG_SPIN_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
         }
 
         if (INS_IsBranchOrCall(tailIns) || INS_IsRet(tailIns)) {
             //pt.insertSwitchCall(tailIns, IPOINT_TAKEN_BRANCH, (AFUNPTR) countInstrsAndSwitch,
-            //        IARG_PMP_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+            //        IARG_SPIN_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
         }
 #endif
     }
 }
 
-void nullCallback(pmp::ThreadId tid) {
+void nullCallback(spin::ThreadId tid) {
 }
 
 int main(int argc, char *argv[]) {
     PIN_InitSymbols();
     if (PIN_Init(argc, argv)) printf("Wrong args\n");
-    pmp::init(trace, threadStart, threadEnd, capture, uncapture);
+    spin::init(trace, threadStart, threadEnd, capture, uncapture);
     PIN_AddFiniFunction(fini, 0);
     PIN_StartProgram();
     return 0;

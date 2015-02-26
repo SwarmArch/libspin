@@ -22,14 +22,14 @@ template <typename ...Args>
 void info(const char* fmt, Args... args) {
     char buf[1024];
     snprintf(buf, 1024, fmt, args...);
-    printf("[pmp] %s\n", buf);
+    printf("[spin] %s\n", buf);
 }
 
 template <typename ...Args>
 void panic(const char* fmt, Args... args) {
     char buf[1024];
     snprintf(buf, 1024, fmt, args...);
-    fprintf(stderr, "[pmp] Panic: %s\n", buf);
+    fprintf(stderr, "[spin] Panic: %s\n", buf);
     fflush(stderr);
     exit(1);
 }

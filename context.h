@@ -30,7 +30,7 @@
 #include <assert.h>
 #include <set>
 
-namespace pmp {
+namespace spin {
 
 /* Performance- and locality-optimized context state */
 

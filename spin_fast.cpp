@@ -34,9 +34,9 @@
 #include <unistd.h>
 
 #include "context.h"
-#include "pmp.h"
+#include "spin.h"
 
-namespace pmp {
+namespace spin {
 
 // Uncomment to do *expensive* context-to-register comparisons; only works on
 // single-threaded code, where registers and the actual context stay in sync.
@@ -59,14 +59,14 @@ template <typename ...Args>
 void info(const char* fmt, Args... args) {
     char buf[1024];
     snprintf(buf, 1024, fmt, args...);
-    printf("[pmp] %s\n", buf);
+    printf("[spin] %s\n", buf);
 }
 
 template <typename ...Args>
 void panic(const char* fmt, Args... args) {
     char buf[1024];
     snprintf(buf, 1024, fmt, args...);
-    fprintf(stderr, "[pmp] Panic: %s\n", buf);
+    fprintf(stderr, "[spin] Panic: %s\n", buf);
     fflush(stderr);
     exit(1);
 }
@@ -141,7 +141,7 @@ ThreadCallback threadEndCallback = nullptr;
  *
  *  Conventional calls simply cause a break on the BBL, and all registers are
  *  saved in case the instrumentation routine reads or writes them (TODO: a
- *  potential optimization is to detect when the call requests the PMP_CONTEXT,
+ *  potential optimization is to detect when the call requests the SPIN_CONTEXT,
  *  and only read/write regs then). For example, with a normal call between I2
  *  and I3, we'd have:
  *  
@@ -172,7 +172,7 @@ ThreadCallback threadEndCallback = nullptr;
  *         SwitchHandler()
  *         jmpq %rax
  *
- * By convention (see pmp.h), SwitchCall() returns the desired thread to real
+ * By convention (see spin.h), SwitchCall() returns the desired thread to real
  * rax (this is safe since we've written every app register).  SwitchHandler()
  * saves the current thread's rip, reads rax, verifies it's a legit thread,
  * changes tcReg to its ThreadContext, and sets rax to the new context's rip.
@@ -870,4 +870,4 @@ void unblock(ThreadId tid) {
     panic("Unimplemented");
 }
 
-}  // namespace pmp
+}  // namespace spin

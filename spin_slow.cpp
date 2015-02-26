@@ -32,25 +32,25 @@
 #include <sstream>
 #include <unistd.h>
 
-#ifndef PMP_SLOW
-#error "You must compile this file with PMP_SLOW"
+#ifndef SPIN_SLOW
+#error "You must compile this file with SPIN_SLOW"
 #endif
 
 #include "mutex.h"
 #include "assert.h"
-#include "pmp.h"
+#include "spin.h"
 #include "log.h"
 
 #define DEBUG(args...)
 //#define DEBUG(args...) info(args)
 
-namespace pmp {
+namespace spin {
 
 // Thread context state (2Kthreads is Pin's current limit)
 #define MAX_THREADS 2048
 std::array<CONTEXT, MAX_THREADS> contexts;
 
-// FIXME: Shared with pmp.cpp!! Move to common file.
+// FIXME: Shared with spin.cpp!! Move to common file.
 enum ThreadState  {
     UNCAPTURED, // Out in a syscall or other point out of our control. Will trip a capture point when it comes back to Pin; will trip before any other instrumentation function.
     BLOCKED,    // In program code, but blocked by the tool
@@ -83,18 +83,18 @@ UncaptureCallback uncaptureCallback = nullptr;
 ThreadCallback threadStartCallback = nullptr;
 ThreadCallback threadEndCallback = nullptr;
 
-/* Tracing design in slow-mode PMP (see the fast-mode comment first)
+/* Tracing design in slow-mode SPIN (see the fast-mode comment first)
  *
- * Slow-mode PMP is what you use when fast-mode PMP craps itself and nothing
+ * Slow-mode SPIN is what you use when fast-mode SPIN craps itself and nothing
  * works and you hate x86 and just want your tool to run, even if it's
  * 100x slower.
  *
- * Therefore, slow-mode PMP is pretty simple: Each normal call works as-is
+ * Therefore, slow-mode SPIN is pretty simple: Each normal call works as-is
  * without any extra instrumentation. Each switchcall returns the next thread
  * to run, and a trailing SwitchHandler() calls SLOW SaveContext and ExecuteAt
  * to switch to it.
  * 
- * Most of the smarts in slow-mode PMP are in handling syscalls, which is
+ * Most of the smarts in slow-mode SPIN are in handling syscalls, which is
  * similar to fast-mode but without the context copies. As in fast mode,
  * a guard at the start of every trace handles captures, and syscalls are
  * prefaced with uncapture callbacks.
@@ -453,4 +453,4 @@ void unblock(ThreadId tid) {
     executorMutex.unlock();
 }
 
-}  // namespace pmp
+}  // namespace spin

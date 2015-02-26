@@ -16,28 +16,28 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _PMP_H_
-#define _PMP_H_
+#ifndef _SPIN_H_
+#define _SPIN_H_
 
-/* Public libpmp interface */
+/* Public libspin interface */
 
 #include <stdint.h>
 #include <tuple>
 #include <vector>
 #include "pin/pin.H"
 
-#ifdef PMP_SLOW
-#define IARG_PMP_CONST_CONTEXT IARG_CONST_CONTEXT
-#define IARG_PMP_CONTEXT IARG_CONTEXT
+#ifdef SPIN_SLOW
+#define IARG_SPIN_CONST_CONTEXT IARG_CONST_CONTEXT
+#define IARG_SPIN_CONTEXT IARG_CONTEXT
 #else
 // Fast context macros to use in analysis routines
 // NOTE: We actually have no way to enforce constness, but have both defs to mirror Pin
-#define IARG_PMP_CONST_CONTEXT IARG_REG_VALUE, pmp::__getContextReg()
-#define IARG_PMP_CONTEXT IARG_REG_VALUE, pmp::__getContextReg()
+#define IARG_SPIN_CONST_CONTEXT IARG_REG_VALUE, spin::__getContextReg()
+#define IARG_SPIN_CONTEXT IARG_REG_VALUE, spin::__getContextReg()
 #endif
-#define IARG_PMP_THREAD_ID IARG_REG_VALUE, pmp::__getSwitchReg()
+#define IARG_SPIN_THREAD_ID IARG_REG_VALUE, spin::__getSwitchReg()
 
-namespace pmp {
+namespace spin {
     // Types
     struct ThreadContext;  // opaque to tool
     typedef uint32_t ThreadId;
@@ -48,7 +48,7 @@ namespace pmp {
     typedef std::vector< std::tuple<INS, IPOINT> > CallpointVector;
 
     // Internal methods --- used by IARG macros
-#ifndef PMP_SLOW
+#ifndef SPIN_SLOW
     REG __getContextReg();
 #endif
     REG __getSwitchReg();
@@ -96,4 +96,4 @@ namespace pmp {
 
 
 
-#endif /* _PMP_H_ */
+#endif /* _SPIN_H_ */

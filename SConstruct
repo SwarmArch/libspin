@@ -16,7 +16,7 @@
 # this program. If not, see <http://www.gnu.org/licenses/>.
 
 #######################################################################
-# Assumes Pin v. 2.13 for the include, lib, and linker paths
+# Assumes Pin v. 2.14 for the include, lib, and linker paths
 #######################################################################
 import os
 
@@ -63,15 +63,15 @@ localenv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
     '-Wl,--version-script=' + pinverspath, '-Wl,-Bsymbolic', '-shared'])
 
 slowenv = localenv.Clone()
-slowenv["CPPFLAGS"] += ["-DPMP_SLOW"]
+slowenv["CPPFLAGS"] += ["-DSPIN_SLOW"]
 slowenv["OBJSUFFIX"] = ".oslow"
 
 localenv.Program(
     target='interleaver.so',
-    source=["interleaver.cpp", "pmp.cpp"],)
+    source=["interleaver.cpp", "spin_fast.cpp"],)
 
 slowenv.Program(
     target='interleaver_slow.so',
-    source=["interleaver.cpp", "pmp_slow.cpp"],)
+    source=["interleaver.cpp", "spin_slow.cpp"],)
 
 
