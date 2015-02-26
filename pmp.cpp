@@ -858,4 +858,16 @@ REG __getSwitchReg() {
     return switchReg;
 }
 
+void blockAfterSwitch() {
+    panic("Unimplemented");
+}
+
+void blockIdleThread(ThreadId tid) {
+    panic("Unimplemented");
+}
+
+void unblock(ThreadId tid) {
+    panic("Unimplemented");
+}
+
 }  // namespace pmp

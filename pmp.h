@@ -85,9 +85,13 @@ namespace pmp {
             CaptureCallback captureCb, UncaptureCallback uncaptureCb);
 
     // Context querying/manipulation methods
-    // DEPRECATED ThreadId getCurThreadId();
     uint64_t getReg(const ThreadContext* tc, uint32_t reg);
     void setReg(ThreadContext* tc, uint32_t reg, uint64_t val);
+
+    // Thread blocking/unblocking
+    void blockAfterSwitch(); /* block current thread immediately after the switchcall; must have other running threads */
+    void blockIdleThread(ThreadId tid); /* thread must not be the running one */
+    void unblock(ThreadId tid);
 };
 
 

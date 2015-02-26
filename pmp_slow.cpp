@@ -53,12 +53,14 @@ std::array<CONTEXT, MAX_THREADS> contexts;
 // FIXME: Shared with pmp.cpp!! Move to common file.
 enum ThreadState  {
     UNCAPTURED, // Out in a syscall or other point out of our control. Will trip a capture point when it comes back to Pin; will trip before any other instrumentation function.
+    BLOCKED,    // In program code, but blocked by the tool
     IDLE,       // Runnable but not active
     RUNNING,    // Currently running
     // Transitions: start -> UNCAPTURED
     //              On capture points: UNCAPTURED -> {IDLE, RUNNING}
     //              On switchpoints: IDLE <-> RUNNING
     //              On uncapture points: RUNNING -> UNCAPTURED
+    //              On block/unblock: IDLE <-> BLOCKED
 };
 
 // Executor state (all strictly protected by executorMutex)
@@ -68,9 +70,8 @@ volatile uint32_t executorTid;  // volatile b/c it's speculatively checked outsi
 uint32_t curTid;
 uint32_t capturedThreads;
 bool executorInSyscall;
-mutex executorMutex;
-
-uint64_t pad[64]; // FIXME
+bool blockAfterSwitchcall;
+aligned_mutex executorMutex;
 
 REG executorReg;
 REG switchReg;
@@ -293,13 +294,19 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
 }
 
 uint64_t NeedsSwitch(uint64_t nextTid) {
-    return (nextTid != curTid);
+    return (nextTid != curTid) | blockAfterSwitchcall;
 }
 
 void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
     uint32_t nextTid = PIN_GetContextReg(ctxt, switchReg);
     executorMutex.lock();
-    if (PIN_GetContextReg(ctxt, executorReg) != 1) panic("[%d] I was supposed to be the executor?? But it's %d", tid, executorTid);
+    if (PIN_GetContextReg(ctxt, executorReg) != 1) {
+        panic("[%d] I was supposed to be the executor?? But it's %d", tid, executorTid);
+    }
+    if (blockAfterSwitchcall && nextTid == curTid) {
+        panic("[%d] Switchcall from thread %d called blockAfterSwitch(), but returned the same thread!", tid, curTid);
+    }
+
     assert(executorTid == tid);
     assert(nextTid != curTid);  // o/w NeedsSwitch would prevent us from running
     assert(curTid <= MAX_THREADS);
@@ -392,6 +399,7 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     curTid = -1u;
     executorTid = -1u;
     executorInSyscall = false;
+    blockAfterSwitchcall = false;
     capturedThreads = 0;
 
     traceCallback = traceCb;
@@ -419,6 +427,30 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
 REG __getSwitchReg() {
     assert(traceCallback);  // o/w not initialized
     return switchReg;
+}
+
+void blockAfterSwitch() {
+    assert(!blockAfterSwitchcall);
+    blockAfterSwitchcall = true;  // honored by switchhandler
+}
+
+void blockIdleThread(ThreadId tid) {
+    executorMutex.lock();
+    assert(tid < MAX_THREADS);
+    assert(threadStates[tid] == IDLE);
+    assert(capturedThreads > 1);
+    threadStates[tid] = BLOCKED;
+    capturedThreads--;
+    executorMutex.unlock();
+}
+
+void unblock(ThreadId tid) {
+    executorMutex.lock();
+    assert(tid < MAX_THREADS);
+    assert(threadStates[tid] == BLOCKED);
+    threadStates[tid] = IDLE;
+    capturedThreads++;
+    executorMutex.unlock();
 }
 
 }  // namespace pmp
