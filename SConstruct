@@ -15,27 +15,40 @@
 # You should have received a copy of the GNU General Public License along with
 # this program. If not, see <http://www.gnu.org/licenses/>.
 
-#######################################################################
-# Assumes Pin v. 2.14 for the include, lib, and linker paths
-#######################################################################
 import os
 
+# Get the mode flag from the command line
+mode = ARGUMENTS.get('mode', 'opt')
+allowedModes = ['debug', 'opt', 'release']
+if mode not in allowedModes:
+    print 'Error: invalid mode', mode, 'allowed:', allowedModes
+    Exit(1)
 
 env = Environment(ENV = os.environ)
-env.Replace(CC = 'gcc-4.8')
-env.Replace(CXX = 'g++-4.8 -O3')
+env['CC'] = 'gcc-4.8'
+env['CXX'] = 'g++-4.8'
 
-localenv = env.Clone()
+env['CPPFLAGS'] = ['-std=c++11', '-Wall', '-Werror', '-Wno-unknown-pragmas',
+    '-fomit-frame-pointer', '-fno-stack-protector', '-mavx']
+env['CPPPATH'] = [os.path.abspath('include/')]
 
-localenv.Append(CPPFLAGS = ['-march=native', '-g', '-std=c++0x', '-Wall', '-Wno-unknown-pragmas',
-    '-fomit-frame-pointer', '-fno-stack-protector', '-MMD', '-mavx',
-    '-DBIGARRAY_MULTIPLIER=1', '-DUSING_XED', '-DTARGET_IA32E', '-DHOST_IA32E',
-    '-fPIC', '-DTARGET_LINUX', '-DMT_SAFE_LOG'])
+modeFlags = {
+    'opt' : ['-O3','-gdwarf-3'],
+    'release' : ['-O3', '-DNDEBUG', '-DNASSERT', '-gdwarf-3', '-march=native'],
+    'debug' : ['-gdwarf-3'],
+}
+env.Append(CPPFLAGS = modeFlags[mode])
 
-PINPATH = os.environ["PIN_HOME"] if "PIN_HOME" in os.environ \
-          else os.environ["PINPATH"]
+# Environment for library (paths assume Pin 2.14)
+pinEnv = env.Clone()
 
-localenv.Append(CPPPATH =
+pinEnv.Append(CPPFLAGS = ['-fPIC', '-MMD', '-DBIGARRAY_MULTIPLIER=1', '-DUSING_XED',
+    '-DTARGET_IA32E', '-DHOST_IA32E', '-DTARGET_LINUX'])
+
+PINPATH = os.environ['PIN_HOME'] if 'PIN_HOME' in os.environ \
+          else os.environ['PINPATH']
+
+pinEnv.Append(CPPPATH =
     [os.path.join(PINPATH, dir) for dir in (
     'extras/xed-intel64/include',
     'source/include',
@@ -44,34 +57,42 @@ localenv.Append(CPPPATH =
     'source/include/pin/gen',
     'extras/components/include')])
 
-localenv.Append(LIBPATH = [os.path.join(PINPATH, dir) for dir in (
+pinEnv.Append(LIBPATH = [os.path.join(PINPATH, dir) for dir in (
     'extras/xed-intel64/lib', 'intel64/lib', 'intel64/lib-ext')])
 
-# [mcj] copied from zsim SConstruct
-# "Libdwarf is provided in static and shared variants, Ubuntu only provides
-# static, and I don't want to add -R<pin path/intel64/lib-ext> because
-# there are some other old libraries provided there (e.g. libelf) and I
-# want to use the system libs as much as possible. So link directly to the
-# static version of libdwarf."
-localenv.Append(LIBS = ['pin', 'xed', 'elf', 'dl', 'rt',
-    File(os.path.join(PINPATH, 'intel64/lib-ext/libpindwarf.a'))])
+pinEnv.Append(LIBS = ['pin', 'xed', 'elf', 'dl', 'rt', 'pindwarf'])
 
 pinverspath = os.path.join(PINPATH, 'source/include/pin/pintool.ver')
 assert os.path.exists(pinverspath), pinverspath
 
-localenv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
+pinEnv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
     '-Wl,--version-script=' + pinverspath, '-Wl,-Bsymbolic', '-shared'])
 
-slowenv = localenv.Clone()
-slowenv["CPPFLAGS"] += ["-DSPIN_SLOW"]
-slowenv["OBJSUFFIX"] = ".oslow"
+(spinFast, spinSlow) = SConscript('lib/SConscript',
+        variant_dir = os.path.join('build', mode, 'lib'),
+        exports = {'env' : pinEnv},
+        duplicate = 0)
 
-localenv.Program(
-    target='interleaver.so',
-    source=["interleaver.cpp", "spin_fast.cpp"],)
+# FIXME: Adding lib/ for mutex.h; tools should use a queue instead
+pinEnv.Append(CPPPATH = [os.path.abspath("lib")])
 
-slowenv.Program(
-    target='interleaver_slow.so',
-    source=["interleaver.cpp", "spin_slow.cpp"],)
+fastEnv = pinEnv.Clone()
+fastEnv['LIBS'] = [spinFast] + fastEnv['LIBS']
+SConscript('tools/SConscript',
+    variant_dir = os.path.join('build', mode, 'tools_fast'),
+    exports = {'env' : fastEnv},
+    duplicate = 0)
 
+slowEnv = pinEnv.Clone()
+slowEnv.Append(LIBS = [spinSlow], CPPFLAGS = '-DSPIN_SLOW')
+SConscript('tools/SConscript',
+    variant_dir = os.path.join('build', mode, 'tools_slow'),
+    exports = {'env' : slowEnv},
+    duplicate = 0)
 
+testEnv = env.Clone()
+testEnv.Append(LIBS = ['pthread'])
+SConscript('tests/SConscript',
+    variant_dir = os.path.join('build', mode, 'tests'),
+    exports = {'env' : testEnv},
+    duplicate = 0)

@@ -24,7 +24,7 @@
 #include <cstddef>
 
 uint64_t baseiters;
-volatile int x;
+volatile uint64_t x;
 
 void* worker(void* arg) {
     uint64_t v = (uintptr_t)arg;
@@ -32,6 +32,7 @@ void* worker(void* arg) {
     for (uint32_t i = 0; i < (v+1)*baseiters; i++) {
         __sync_fetch_and_add(&x, 1);
     }
+    return nullptr;
 }
 
 int main(int argc, const char* argv[]) {

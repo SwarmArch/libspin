@@ -20,6 +20,7 @@
 #define __ASSERT_H__
 
 #include "log.h"
+#include <sstream>
 
 // assertions are often frequently executed but never taken. Might as well tell the compiler about it
 #define likely(x) __builtin_expect((x), 1)

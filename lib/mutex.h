@@ -16,21 +16,31 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#ifndef __MUTEX_H__
+#define __MUTEX_H__
 
-template <typename ...Args>
-void info(const char* fmt, Args... args) {
-    char buf[1024];
-    snprintf(buf, 1024, fmt, args...);
-    printf("[spin] %s\n", buf);
-}
+#include "locks.h"
+#include "pad.h"
 
-template <typename ...Args>
-void panic(const char* fmt, Args... args) {
-    char buf[1024];
-    snprintf(buf, 1024, fmt, args...);
-    fprintf(stderr, "[spin] Panic: %s\n", buf);
-    fflush(stderr);
-    exit(1);
-}
+class mutex {
+    private:
+        volatile uint32_t futex;
+    public:
+        mutex() { futex_init(&futex); }
+        void lock() { futex_lock(&futex); }
+        void unlock() { futex_unlock(&futex); }
+        bool haswaiters() { return futex_haswaiters(&futex); }
+};
 
+class aligned_mutex : public mutex {} ATTR_LINE_ALIGNED;
+
+class scoped_mutex {
+    private:
+        mutex* mut;
+    public:
+        scoped_mutex(mutex& _mut) : mut(&_mut) { mut->lock(); }
+        scoped_mutex() : mut(0) {}
+        ~scoped_mutex() { if (mut) mut->unlock(); }
+};
+
+#endif /*__MUTEX_H__*/

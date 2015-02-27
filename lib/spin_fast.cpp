@@ -87,7 +87,7 @@ REG switchReg;
 // Callbacks, set on init
 TraceCallback traceCallback = nullptr;
 UncaptureCallback uncaptureCallback = nullptr;
-ThreadCallback captureCallback = nullptr;
+CaptureCallback captureCallback = nullptr;
 ThreadCallback threadStartCallback = nullptr;
 ThreadCallback threadEndCallback = nullptr;
 
@@ -773,6 +773,7 @@ ThreadContext* Capture(THREADID tid, CONTEXT* ctxt) {
         }
     }
 #endif
+    return nullptr;
 }
 
 
@@ -799,7 +800,7 @@ void ThreadFini(THREADID tid, const CONTEXT* ctxt, INT32 code, VOID* v) {
 
 /* Public interface */
 
-void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, ThreadCallback captureCb, UncaptureCallback uncaptureCb) {
+void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, CaptureCallback captureCb, UncaptureCallback uncaptureCb) {
     traceCallback = traceCb;
     threadStartCallback = startCb;
     threadEndCallback = endCb;
