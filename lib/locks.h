@@ -16,11 +16,10 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-
-/* dsm: Futex lock from zsim, works inside Pin and across multiple processes */
-
 #ifndef LOCKS_H_
 #define LOCKS_H_
+
+/* dsm: Futex lock from zsim, works inside Pin and across multiple processes */
 
 #include <linux/futex.h>
 #include <stdint.h>

@@ -16,7 +16,8 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#ifndef LOG_H_
+#define LOG_H_
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,3 +38,4 @@ void panic(const char* fmt, Args... args) {
     exit(1);
 }
 
+#endif  // LOG_H_

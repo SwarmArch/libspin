@@ -16,8 +16,8 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _SPIN_H_
-#define _SPIN_H_
+#ifndef SPIN_H_
+#define SPIN_H_
 
 /* Public libspin interface */
 
@@ -94,6 +94,4 @@ namespace spin {
     void unblock(ThreadId tid);
 };
 
-
-
-#endif /* _SPIN_H_ */
+#endif  // SPIN_H_

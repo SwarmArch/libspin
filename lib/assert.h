@@ -16,8 +16,8 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef __ASSERT_H__
-#define __ASSERT_H__
+#ifndef ASSERT_H_
+#define ASSERT_H_
 
 #include "log.h"
 #include <sstream>
@@ -83,4 +83,4 @@ if (unlikely(!(expr))) { \
 #define assert(cond) do { (void)sizeof(cond); } while (0);
 #endif
 
-#endif //__ASSERT_H__
+#endif  // ASSERT_H_

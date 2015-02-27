@@ -16,6 +16,9 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifndef CONTEXT_H_
+#define CONTEXT_H_
+
 #include "pin/pin.H"
 
 #include <algorithm>
@@ -186,3 +189,5 @@ inline void WriteGenericReg(ThreadContext* tc, REG r, const PIN_REGISTER* val) {
 }
 
 }
+
+#endif  // CONTEXT_H_
