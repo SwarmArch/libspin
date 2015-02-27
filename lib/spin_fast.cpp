@@ -34,6 +34,7 @@
 #include <unistd.h>
 
 #include "context.h"
+#include "log.h"
 #include "spin.h"
 
 namespace spin {
@@ -54,22 +55,6 @@ namespace spin {
 #define TRACE_VERSION_DEFAULT (0)
 #define TRACE_VERSION_NOJUMP  (1)
 
-
-template <typename ...Args>
-void info(const char* fmt, Args... args) {
-    char buf[1024];
-    snprintf(buf, 1024, fmt, args...);
-    printf("[spin] %s\n", buf);
-}
-
-template <typename ...Args>
-void panic(const char* fmt, Args... args) {
-    char buf[1024];
-    snprintf(buf, 1024, fmt, args...);
-    fprintf(stderr, "[spin] Panic: %s\n", buf);
-    fflush(stderr);
-    exit(1);
-}
 
 // Thread context state (2Kthreads is Pin's current limit)
 #define MAX_THREADS 2048

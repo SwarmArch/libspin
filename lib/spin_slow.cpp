@@ -50,7 +50,7 @@ namespace spin {
 #define MAX_THREADS 2048
 std::array<CONTEXT, MAX_THREADS> contexts;
 
-// FIXME: Shared with spin.cpp!! Move to common file.
+// FIXME: Shared with spin_fast.cpp!! Move to common file.
 enum ThreadState  {
     UNCAPTURED, // Out in a syscall or other point out of our control. Will trip a capture point when it comes back to Pin; will trip before any other instrumentation function.
     BLOCKED,    // In program code, but blocked by the tool
@@ -85,14 +85,11 @@ ThreadCallback threadEndCallback = nullptr;
 
 /* Tracing design in slow-mode SPIN (see the fast-mode comment first)
  *
- * Slow-mode SPIN is what you use when fast-mode SPIN craps itself and nothing
- * works and you hate x86 and just want your tool to run, even if it's
- * 100x slower.
+ * Slow mode is ~100x slower than fast mode, but more robust and simpler.
  *
- * Therefore, slow-mode SPIN is pretty simple: Each normal call works as-is
- * without any extra instrumentation. Each switchcall returns the next thread
- * to run, and a trailing SwitchHandler() calls SLOW SaveContext and ExecuteAt
- * to switch to it.
+ * In slow mode, each normal analysis call works as-is without any extra
+ * instrumentation. Each switchcall returns the next thread to run, and a
+ * trailing SwitchHandler() uses SLOW PIN_ExecuteAt to switch to it.
  * 
  * Most of the smarts in slow-mode SPIN are in handling syscalls, which is
  * similar to fast-mode but without the context copies. As in fast mode,
@@ -263,19 +260,13 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         // We ourselves need to take the syscall...
         if (capturedThreads >= 2) {
             // 2. Wake up another idle thread to continue execution
-            uint32_t wakeTid = MAX_THREADS;
-            for (uint32_t t = 0; t < MAX_THREADS; t++) {
-                if (threadStates[t] == IDLE) {
-                    wakeTid = t;
-                    break;
-                }
-            }
-            assert(wakeTid < MAX_THREADS);
-            assert(wakeTid != tid);
+            // Instead of searching for an idle non-executor thread, we
+            // leverage that the thread we switch to must be captured, and make
+            // that the executor as well.
             UncaptureAndSwitch();  // changes curTid
             executorTid = -1u;
-            DEBUG("[%d] SG: Waking real tid %d, now running %d, and going to syscall", tid, wakeTid, curTid);
-            waitLocks[wakeTid].unlock();  // wake new executor
+            DEBUG("[%d] SG: Waking real tid %d, now running %d, and going to syscall", tid, curTid, curTid);
+            waitLocks[curTid].unlock();  // wake new executor
         } else {
             // 3. We're the only captured thread, so if we uncaptured ourselves
             // the tool would run out of threads. Instead, let the first
@@ -431,7 +422,7 @@ REG __getSwitchReg() {
 
 void blockAfterSwitch() {
     assert(!blockAfterSwitchcall);
-    blockAfterSwitchcall = true;  // honored by switchhandler
+    blockAfterSwitchcall = true;  // honored by SwitchHandler
 }
 
 void blockIdleThread(ThreadId tid) {
