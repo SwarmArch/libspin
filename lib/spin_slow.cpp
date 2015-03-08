@@ -312,7 +312,14 @@ void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
 
     DEBUG("[%d] Switching %d -> %d", tid, curTid, nextTid);
     assert(threadStates[curTid] == RUNNING);
-    threadStates[curTid] = IDLE;
+    if (!blockAfterSwitchcall) {
+        threadStates[curTid] = IDLE;
+    } else {
+        threadStates[curTid] = BLOCKED;
+        capturedThreads--;
+        blockAfterSwitchcall = false;
+    }
+
     curTid = nextTid;
     threadStates[curTid] = RUNNING;
     executorMutex.unlock();
