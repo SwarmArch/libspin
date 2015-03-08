@@ -415,6 +415,20 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
     PIN_SetContextReg((CONTEXT*)tc, reg, val);
 }
 
+void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt) {
+    PIN_SaveContext((const CONTEXT*)tc, pinCtxt);
+}
+
+void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc) {
+    PIN_SaveContext(pinCtxt, (CONTEXT*)tc);
+}
+
+ThreadContext* getContext(ThreadId tid) {
+    assert(tid < MAX_THREADS);
+    assert(threadStates[tid] == BLOCKED || threadStates[tid] == IDLE);
+    return (ThreadContext*)&contexts[tid];
+}
+
 REG __getSwitchReg() {
     assert(traceCallback);  // o/w not initialized
     return switchReg;

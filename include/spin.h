@@ -85,8 +85,13 @@ namespace spin {
             CaptureCallback captureCb, UncaptureCallback uncaptureCb);
 
     // Context querying/manipulation methods
-    uint64_t getReg(const ThreadContext* tc, uint32_t reg);
-    void setReg(ThreadContext* tc, uint32_t reg, uint64_t val);
+    uint64_t getReg(const ThreadContext* tc, REG reg);
+    void setReg(ThreadContext* tc, REG reg, uint64_t val);
+    void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt);
+    void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc);
+    
+    // NOTE: tid must be != running tid
+    ThreadContext* getContext(ThreadId tid);
 
     // Thread blocking/unblocking
     void blockAfterSwitch(); /* block current thread immediately after the switchcall; must have other running threads */

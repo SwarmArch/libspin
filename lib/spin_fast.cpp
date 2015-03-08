@@ -834,6 +834,21 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
     }
 }
 
+void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt) {
+    panic("Unimplemented in fast mode");
+}
+
+void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc) {
+    panic("Unimplemented in fast mode");
+}
+
+ThreadContext* getContext(ThreadId tid) {
+    panic("Unimplemented in fast mode");
+    return nullptr;
+}
+
+
+
 REG __getContextReg() {
     assert(traceCallback);  // o/w not initialized
     return tcReg;
