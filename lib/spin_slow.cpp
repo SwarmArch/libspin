@@ -101,7 +101,7 @@ ThreadCallback threadEndCallback = nullptr;
 
 void ThreadStart(THREADID tid, CONTEXT* ctxt, INT32 flags, VOID* v) {
     executorMutex.lock();
-    info("Thread %d started", tid);
+    DEBUG("Thread %d started", tid);
     threadStartCallback(tid);
     assert(threadStates[tid] == UNCAPTURED);
     PIN_SetContextReg(ctxt, executorReg, 0);  // will be captured immediately
@@ -110,7 +110,7 @@ void ThreadStart(THREADID tid, CONTEXT* ctxt, INT32 flags, VOID* v) {
 
 void ThreadFini(THREADID tid, const CONTEXT* ctxt, INT32 code, VOID* v) {
     executorMutex.lock();
-    info("Thread %d finished", tid);
+    DEBUG("Thread %d finished", tid);
     if (threadStates[tid] == RUNNING) {
         assert(capturedThreads == 1);
         // This is the last thread, nothing to do. We do not call
