@@ -847,7 +847,9 @@ ThreadContext* getContext(ThreadId tid) {
     return nullptr;
 }
 
-
+void executeAt(ThreadContext* tc, ADDRINT nextPc) {
+    setReg(tc, REG_RIP, nextPc);
+}
 
 REG __getContextReg() {
     assert(traceCallback);  // o/w not initialized

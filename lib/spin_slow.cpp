@@ -436,6 +436,13 @@ ThreadContext* getContext(ThreadId tid) {
     return (ThreadContext*)&contexts[tid];
 }
 
+void executeAt(ThreadContext* tc, ADDRINT nextPc) {
+    ADDRINT curPc = getReg(tc, REG_RIP);
+    assert(nextPc != curPc);  // will enter an infinite loop otherwise
+    setReg(tc, REG_RIP, nextPc);
+    PIN_ExecuteAt((CONTEXT*)tc);
+}
+
 REG __getSwitchReg() {
     assert(traceCallback);  // o/w not initialized
     return switchReg;
