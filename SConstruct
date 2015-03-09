@@ -60,7 +60,7 @@ pinEnv.Append(CPPPATH =
 pinEnv.Append(LIBPATH = [os.path.join(PINPATH, dir) for dir in (
     'extras/xed-intel64/lib', 'intel64/lib', 'intel64/lib-ext')])
 
-pinEnv.Append(LIBS = ['pin', 'xed', 'elf', 'dl', 'rt', 'pindwarf'])
+pinEnv.Append(LIBS = ['pin', 'xed', 'dl', 'rt', 'pindwarf'])
 
 pinverspath = os.path.join(PINPATH, 'source/include/pin/pintool.ver')
 assert os.path.exists(pinverspath), pinverspath
