@@ -29,7 +29,7 @@ env['CC'] = 'gcc-4.8'
 env['CXX'] = 'g++-4.8'
 
 env['CPPFLAGS'] = ['-std=c++11', '-Wall', '-Werror', '-Wno-unknown-pragmas',
-    '-fomit-frame-pointer', '-fno-stack-protector', '-mavx']
+    '-fomit-frame-pointer', '-fno-stack-protector']
 env['CPPPATH'] = [os.path.abspath('include/')]
 
 modeFlags = {
@@ -38,6 +38,23 @@ modeFlags = {
     'debug' : ['-gdwarf-3'],
 }
 env.Append(CPPFLAGS = modeFlags[mode])
+
+# Determine whether this machine supports AVX
+# http://amitsaha.github.io/site/notes/articles/python_linux/article.html
+isAvxAvailable = False;
+with open('/proc/cpuinfo') as f:
+    flags = ""
+    for line in f:
+        if line.strip() and line.rstrip('\n').startswith('flags'):
+            flags = line.rstrip('\n')
+            break;
+    if flags:
+        if 'avx' in flags.split():
+            env.Append(CPPFLAGS = '-mavx')
+            isAvxAvailable = True
+        if 'sse4_2' in flags.split(): env.Append(CPPFLAGS = '-msse4.2')
+        if 'sse4_1' in flags.split(): env.Append(CPPFLAGS = '-msse4.1')
+
 
 # Environment for library (paths assume Pin 2.14)
 pinEnv = env.Clone()
@@ -68,27 +85,26 @@ assert os.path.exists(pinverspath), pinverspath
 pinEnv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
     '-Wl,--version-script=' + pinverspath, '-Wl,-Bsymbolic', '-shared'])
 
-(spinFast, spinSlow) = SConscript('lib/SConscript',
+genericToolEnv = pinEnv.Clone()
+# FIXME: Adding lib/ for mutex.h; tools should use a queue instead
+genericToolEnv.Append(CPPPATH = [os.path.abspath("lib")])
+
+speeds = ['slow'] + (['fast'] if isAvxAvailable else [])
+for speed in speeds:
+    spinLib = SConscript('lib/SConscript',
         variant_dir = os.path.join('build', mode, 'lib'),
-        exports = {'env' : pinEnv},
+        exports = {'env' : pinEnv, 'speed' : speed},
         duplicate = 0)
 
-# FIXME: Adding lib/ for mutex.h; tools should use a queue instead
-pinEnv.Append(CPPPATH = [os.path.abspath("lib")])
+    toolEnv = genericToolEnv.Clone()
+    toolEnv.Append(LIBS = spinLib)
+    if speed == 'slow':
+        toolEnv.Append(CPPFLAGS = '-DSPIN_SLOW')
 
-fastEnv = pinEnv.Clone()
-fastEnv['LIBS'] = [spinFast] + fastEnv['LIBS']
-SConscript('tools/SConscript',
-    variant_dir = os.path.join('build', mode, 'tools_fast'),
-    exports = {'env' : fastEnv},
-    duplicate = 0)
-
-slowEnv = pinEnv.Clone()
-slowEnv.Append(LIBS = [spinSlow], CPPFLAGS = '-DSPIN_SLOW')
-SConscript('tools/SConscript',
-    variant_dir = os.path.join('build', mode, 'tools_slow'),
-    exports = {'env' : slowEnv},
-    duplicate = 0)
+    SConscript('tools/SConscript',
+        variant_dir = os.path.join('build', mode, 'tools_{}'.format(speed)),
+        exports = {'env' : toolEnv},
+        duplicate = 0)
 
 testEnv = env.Clone()
 testEnv.Append(LIBS = ['pthread'])
