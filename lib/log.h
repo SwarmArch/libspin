@@ -22,20 +22,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-template <typename ...Args>
-void info(const char* fmt, Args... args) {
-    char buf[1024];
-    snprintf(buf, 1024, fmt, args...);
-    printf("[spin] %s\n", buf);
+static inline void info(const char* str) {
+    printf("[spin] %s\n", str);
 }
 
 template <typename ...Args>
-void panic(const char* fmt, Args... args) {
+static void info(const char* fmt, Args... args) {
     char buf[1024];
     snprintf(buf, 1024, fmt, args...);
-    fprintf(stderr, "[spin] Panic: %s\n", buf);
+    info(buf);
+}
+
+static inline void panic(const char* str) {
+    fprintf(stderr, "[spin] Panic: %s\n", str);
     fflush(stderr);
     exit(1);
+}
+
+template <typename ...Args>
+static void panic(const char* fmt, Args... args) {
+    char buf[1024];
+    snprintf(buf, 1024, fmt, args...);
+    panic(buf);
 }
 
 #endif  // LOG_H_
