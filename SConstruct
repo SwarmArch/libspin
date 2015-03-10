@@ -97,7 +97,11 @@ for speed in speeds:
         duplicate = 0)
 
     toolEnv = genericToolEnv.Clone()
-    toolEnv.Append(LIBS = spinLib)
+    # mcj: WHYYYY can't I use typical SCons form and append the static library?
+    # For some reason spinLib must be the first of the linked libraries (at
+    # least for fast mode)
+    # toolEnv.Append(LIBS = [spinLib])
+    toolEnv['LIBS'] = [spinLib] + toolEnv['LIBS']
     if speed == 'slow':
         toolEnv.Append(CPPFLAGS = '-DSPIN_SLOW')
 
