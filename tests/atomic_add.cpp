@@ -53,6 +53,9 @@ int main(int argc, const char* argv[]) {
         pthread_join(th[i], nullptr);
     }
     printf("x: %ld\n", x);
-    return 0;
+    bool verify = x == (baseiters * nthreads * (nthreads + 1)) / 2; 
+    printf("Verify: %s\n", verify ? "OK" : "Incorrect");
+    if (!verify) return -1;
+    else return 0;
 }
 
