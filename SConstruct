@@ -59,8 +59,9 @@ with open('/proc/cpuinfo') as f:
 # Environment for library (paths assume Pin 2.14)
 pinEnv = env.Clone()
 
-pinEnv.Append(CPPFLAGS = ['-fPIC', '-MMD', '-DBIGARRAY_MULTIPLIER=1', '-DUSING_XED',
-    '-DTARGET_IA32E', '-DHOST_IA32E', '-DTARGET_LINUX'])
+pinEnv.Append(CPPFLAGS = ['-fPIC', '-MMD'])
+pinEnv.Append(CPPDEFINES = [('BIGARRAY_MULTIPLIER',1), 'USING_XED',
+    'TARGET_IA32E', 'HOST_IA32E', 'TARGET_LINUX'])
 
 PINPATH = os.environ['PIN_HOME'] if 'PIN_HOME' in os.environ \
           else os.environ['PINPATH']
@@ -103,7 +104,7 @@ for speed in speeds:
     # toolEnv.Append(LIBS = [spinLib])
     toolEnv['LIBS'] = [spinLib] + toolEnv['LIBS']
     if speed == 'slow':
-        toolEnv.Append(CPPFLAGS = '-DSPIN_SLOW')
+        toolEnv.Append(CPPDEFINES = 'SPIN_SLOW')
 
     SConscript('tools/SConscript',
         variant_dir = os.path.join('build', mode, 'tools_{}'.format(speed)),

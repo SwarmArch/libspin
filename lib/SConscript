@@ -22,7 +22,7 @@ assert speed in ['fast', 'slow']
 libEnv = None
 if speed == 'slow':
     libEnv = env.Clone()
-    libEnv['CPPFLAGS'] += ['-DSPIN_SLOW']
+    libEnv.Append(CPPDEFINES = 'SPIN_SLOW')
     libEnv['OBJSUFFIX'] = '.oslow'
 else:
     libEnv = env
