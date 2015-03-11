@@ -847,6 +847,10 @@ ThreadContext* getContext(ThreadId tid) {
     return nullptr;
 }
 
+const ThreadContext* getConstContext(ThreadId tid) {
+    return (const ThreadContext*) getContext(tid);
+}
+
 void executeAt(ThreadContext* tc, ADDRINT nextPc) {
     setReg(tc, REG_RIP, nextPc);
 }

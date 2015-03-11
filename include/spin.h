@@ -92,6 +92,8 @@ namespace spin {
 
     // NOTE: tid must be != running tid
     ThreadContext* getContext(ThreadId tid);
+    // Note: fewer restrictions since this context is read-only
+    const ThreadContext* getConstContext(ThreadId tid);
 
     /* If you modify the current ThreadContext in a switchcall, you must call
      * this routine immmediately befoere returning from the switchcall to alter
