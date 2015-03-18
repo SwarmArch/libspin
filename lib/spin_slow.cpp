@@ -436,12 +436,6 @@ ThreadContext* getContext(ThreadId tid) {
     return (ThreadContext*)&contexts[tid];
 }
 
-const ThreadContext* getConstContext(ThreadId tid) {
-    assert(tid < MAX_THREADS);
-    return (const ThreadContext*)&contexts[tid];
-}
-
-
 void executeAt(ThreadContext* tc, ADDRINT nextPc) {
     ADDRINT curPc = getReg(tc, REG_RIP);
     assert(nextPc != curPc);  // will enter an infinite loop otherwise
