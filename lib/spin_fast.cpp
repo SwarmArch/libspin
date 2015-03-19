@@ -37,6 +37,8 @@
 #include "log.h"
 #include "spin.h"
 
+#define DEBUG(args...) //info(args)
+
 namespace spin {
 
 // Uncomment to do *expensive* context-to-register comparisons; only works on
@@ -222,7 +224,7 @@ ThreadCallback threadEndCallback = nullptr;
 
 /* Context read/write instrumentation */
 
-void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG> inRegs) {
+void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG>& inRegs) {
     for (REG r : inRegs) {
         if (r == REG_RIP) continue;  // RIP must be handled differently
 
@@ -316,7 +318,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
     }
 }
 
-void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG> inRegs) {
+void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG>& inRegs) {
     for (REG r : inRegs) {
         if (r == REG_RIP) continue;  // RIP must be handled differently
 
@@ -420,6 +422,10 @@ ThreadContext* TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     return &contexts[tid];
 }
 
+uint64_t GetContextTid(const ThreadContext* tc) {
+    return tc - &contexts[0];
+}
+
 void SyscallTraceGuard() {
     info("In SyscallTraceGuard");
 }
@@ -429,10 +435,10 @@ ADDRINT IsTCRegInvalid(const ThreadContext* tc) {
 }
 
 ThreadContext* SwitchHandler(ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
-    //assert(tc);
+    assert(tc);
     WriteReg<REG_RIP>(tc, nextPC);
-    //assert(nextThreadId < MAX_THREADS);
-    //info("Switch @ 0x%lx", nextPC);
+    assert(nextThreadId < MAX_THREADS);
+    //info("Switch @ 0x%lx tc %lx", nextPC, (uintptr_t)tc);
     return &contexts[nextThreadId];
 }
 
@@ -448,6 +454,7 @@ ADDRINT CheckArgsMatch(ADDRINT tc, ADDRINT sw) {
 
 // Seems silly? Pin inlines, resulting in single-instruction register copy
 ADDRINT ReturnArg(ADDRINT arg) {
+    //info("ReturnArg %lx", arg);
     return arg;
 }
 
@@ -573,7 +580,7 @@ void Trace(TRACE trace, VOID *v) {
         curEnd++;
     }
 
-#if 1
+#if 0
     info("trace ver %d", TRACE_Version(trace));
     for (auto seq : insSeqs) {
         uint32_t firstIdx = std::get<0>(seq);
@@ -604,6 +611,11 @@ void Trace(TRACE trace, VOID *v) {
                 IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_RETURN_REGS, tcReg,
                 IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
     }
+    
+    // Refresh context register
+    INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
+            IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg,
+            IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
 
     // Insert reads and writes around instruction sequences
     // Reads: Last thing before first instr in sequence
