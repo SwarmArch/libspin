@@ -51,7 +51,9 @@ uint32_t uncapture(spin::ThreadId tid, spin::ThreadContext* tc) {
     scoped_mutex sm(queueMutex);
     assert(!threadQueue.empty());  // spin should not call this with a single thread
     uint32_t next = threadQueue.front();
-    printf("Uncapture of tid %d, moving to %d q{%ld elems}[%d...%d]\n", tid, next, threadQueue.size(), threadQueue.front(), threadQueue.back());
+    printf("Uncapture of tid %d (pc %lx), moving to %d q{%ld elems}[%d...%d]\n",
+            tid, spin::getReg(tc, REG_RIP), next, threadQueue.size(),
+            threadQueue.front(), threadQueue.back());
     threadQueue.pop_front();
     switchCount++;
     return next;
@@ -68,12 +70,12 @@ void capture(spin::ThreadId tid, bool runsNext) {
 
 void threadStart(spin::ThreadId tid) {
     threadStartCount++;
-    printf("interleaver: threadStart\n");
+    printf("interleaver: threadStart %d\n", tid);
 }
 
 void threadEnd(spin::ThreadId tid) {
     threadEndCount++;
-    printf("interleaver: threadEnd\n");
+    printf("interleaver: threadEnd %d\n", tid);
     if (threadStartCount == threadEndCount) {
         printf("interleaver: done\n");
     }
@@ -118,6 +120,7 @@ void trace(TRACE trace, spin::TraceInfo& pt) {
         }
 
 #if 1
+        //INS tgtIns = BBL_InsTail(bbl); 
         INS tgtIns = BBL_InsHead(bbl);
         //if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
         //if (!INS_Stutters(tailIns)) {
