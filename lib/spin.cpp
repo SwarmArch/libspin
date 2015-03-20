@@ -151,7 +151,7 @@ void UncaptureAndSwitch() {
         panic("Switchcall returned tid %d, which is not IDLE (state[%d] = %d, curTid = %d executorTid = %d)",
                 nextTid, nextTid, threadStates[nextTid], curTid, executorTid);
     }
-    
+
     capturedThreads--;
     assert(threadStates[curTid] == RUNNING);
     threadStates[curTid] = UNCAPTURED;
@@ -187,7 +187,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
 
     ThreadContext* tc = GetTC(tid);
     InitContext(ctxt, tc);
-    
+
     if (threadStates[tid] == RUNNING) {
         // We did not yield executor role when we ran the syscall, so keep
         // going as usual
@@ -242,7 +242,7 @@ void WaitForExecutorRoleOrSyscall(THREADID tid, bool alwaysBlock) {
         // See SyscallGuard for the delayed uncapture code
         // NOTE: Even if we were work up for a delayed syscall, an intervening
         // thread may run the delayed uncapture. That is perfectly fine.
-        bool delayedUncaptureSyscall = threadStates[tid] == RUNNING && 
+        bool delayedUncaptureSyscall = threadStates[tid] == RUNNING &&
             executorTid == tid && executorInSyscall;
         if (regularSyscall || delayedUncaptureSyscall) {
             // Take syscall
@@ -282,7 +282,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     executorMutex.lock();
     DEBUG("[%d] In SyscallGuard() (curTid %d rip 0x%lx er %d)", tid, curTid,
             PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, tcReg)? 1 : 0);
- 
+
     assert(executorTid == tid);
     assert(curTid == PIN_GetContextReg(ctxt, tidReg));
 
@@ -291,7 +291,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     CoalesceContext(ctxt, GetTC(curTid));
 
     if (curTid != tid) {
-        // We need to ship off this syscall and move on to another thread 
+        // We need to ship off this syscall and move on to another thread
         if (capturedThreads >= 2) {
             // Both us and the tid we're running are captured and unblocked
             uint32_t wakeTid = curTid;
@@ -311,17 +311,17 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
             // modes. So tough it out.
             assert(capturedThreads == 1);
             assert(threadStates[tid] == BLOCKED);
-            
+
             // We can't uncapture, as there's nothing to switch to! Instead:
             // 1. Post a delayed uncapture
             executorTid = curTid;
             assert(!executorInSyscall);
             executorInSyscall = true;
-            
+
             // 2. Wake the other thread (who's in WaitForExecutor, see the matching logic there)
             DEBUG("[%d] SG: Waking real tid %d to run its syscall, and blocking ourselves", tid, curTid);
             waitLocks[curTid].unlock();  // wake new executor
-            
+
             // 3. Block, as we are a blocked thread
             WaitForExecutorRoleOrSyscall(tid, true /*always block*/);
         }
@@ -344,7 +344,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
             assert(!executorInSyscall);
             executorInSyscall = true;
         }
-        
+
         executorMutex.unlock();
 
         // Take our syscall
@@ -396,14 +396,14 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
 void InstrumentTrace(TRACE trace, VOID *v) {
     INS firstIns = BBL_InsHead(TRACE_BblHead(trace));
     bool isSyscallTrace = INS_IsSyscall(firstIns);
-    
+
     // Trace guard
     if (!isSyscallTrace) {
         INS_InsertIfCall(firstIns, IPOINT_BEFORE, (AFUNPTR)RunTraceGuard,
                 IARG_REG_VALUE, tcReg,
                 IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
         INS_InsertThenCall(firstIns, IPOINT_BEFORE, (AFUNPTR)TraceGuard,
-                IARG_THREAD_ID, IARG_CONST_CONTEXT, 
+                IARG_THREAD_ID, IARG_CONST_CONTEXT,
                 IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
     }
 
@@ -415,7 +415,7 @@ void InstrumentTrace(TRACE trace, VOID *v) {
                         IARG_REG_VALUE, tcReg,
                         IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
                 INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SyscallGuard,
-                        IARG_THREAD_ID, IARG_CONST_CONTEXT, 
+                        IARG_THREAD_ID, IARG_CONST_CONTEXT,
                         IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
             }
         }
@@ -442,7 +442,7 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     threadEndCallback = endCb;
     captureCallback = captureCb;
     uncaptureCallback = uncaptureCb;
-    
+
     tcReg = PIN_ClaimToolRegister();
     tidReg = PIN_ClaimToolRegister();
     switchReg = PIN_ClaimToolRegister();
