@@ -73,7 +73,7 @@ struct ThreadContext {
 
 /* Init interface */
 
-inline void InitContext(ThreadContext* tc, const CONTEXT* ctxt) {
+inline void InitContext(const CONTEXT* ctxt, ThreadContext* tc) {
     PIN_SaveContext(ctxt, &tc->pinCtxt);
 
     tc->rip = PIN_GetContextReg(ctxt, REG_RIP);
@@ -94,26 +94,22 @@ inline void InitContext(ThreadContext* tc, const CONTEXT* ctxt) {
     }
 }
 
-inline void CopyToPinContext(ThreadContext* tc, CONTEXT* ctxt) {
-    // First, copy our bulk pinCtxt to the Pin context
-    PIN_SaveContext(&tc->pinCtxt, ctxt);
-   
-    // Then copy the fast regs
-    PIN_SetContextReg(ctxt, REG_RIP, tc->rip);
-    PIN_SetContextReg(ctxt, REG_RFLAGS, tc->rflags);
+inline void UpdatePinContext(ThreadContext* tc) {
+    PIN_SetContextReg(&tc->pinCtxt, REG_RIP, tc->rip);
+    PIN_SetContextReg(&tc->pinCtxt, REG_RFLAGS, tc->rflags);
 
     for (uint32_t i = REG_GR_BASE; i <= REG_GR_LAST; i++) {
-        PIN_SetContextReg(ctxt, (REG)i, tc->gpRegs[i - REG_GR_BASE]);
+        PIN_SetContextReg(&tc->pinCtxt, (REG)i, tc->gpRegs[i - REG_GR_BASE]);
     }
 
     for (uint32_t i = REG_SEG_BASE; i <= REG_SEG_LAST; i++) {
-        PIN_SetContextReg(ctxt, (REG)i, tc->segRegs[i - REG_SEG_BASE]);
+        PIN_SetContextReg(&tc->pinCtxt, (REG)i, tc->segRegs[i - REG_SEG_BASE]);
     }
 
     for (uint32_t i = REG_YMM_BASE; i <= REG_YMM_LAST; i++) {
         REG r = (REG)i;
         assert(REG_Size(r) == sizeof(__m256));
-        PIN_SetContextRegval(ctxt, (REG)i, (uint8_t*)&tc->fpRegs[i - REG_YMM_BASE]);
+        PIN_SetContextRegval(&tc->pinCtxt, (REG)i, (uint8_t*)&tc->fpRegs[i - REG_YMM_BASE]);
     }
 }
 

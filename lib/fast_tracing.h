@@ -16,72 +16,23 @@
  * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "pin/pin.H"
+/* NOTE: This file must be included only from spin.cpp. It's not actually a
+ * header (for performance and because this code is only used from one place)
+ */
 
-#include <algorithm>
-#include <array>
-#include <vector>
-#include <queue>
-#include <cstdlib>
-#include <random>
-#include <string>
+#ifdef SPIN_SLOW
+#error "You must compile this file without SPIN_SLOW"
+#endif
 
-#include <iostream>
-#include <assert.h>
-#include <set>
-#include <map>
-#include <sstream>
-#include <unistd.h>
+#include "fast_context.h"
 
-#include "context.h"
-#include "log.h"
-#include "spin.h"
-
-#define DEBUG(args...) //info(args)
-
-namespace spin {
-
-// Uncomment to do *expensive* context-to-register comparisons; only works on
-// single-threaded code, where registers and the actual context stay in sync.
-// Useful to catch bugs exhaustively in single-threaded code.
-// Breaks Pin with -inline 0 (Pin tries to spill FS, craps itself)
-//#define DEBUG_COMPARE_REGS
-
-// We want to be able to have switchcalls before the first instruction of a
-// basic block, which thankfully we can do at low overhead with multi-versioned
-// traces. A switchcall before the first instruction of a trace starts in mode
-// 0, and indirect-jumps to mode 0 so long as we're switching among threads. To
-// avoid an infinite loop, the moment the switchcall returns the same thread,
-// it jumps to version 1, which does not have the initial jump test. All
-// version 1 traces ALWAYS immediately jump to mode 0.
-#define TRACE_VERSION_DEFAULT (0)
-#define TRACE_VERSION_NOJUMP  (1)
-
-
-// Thread context state (2Kthreads is Pin's current limit)
-#define MAX_THREADS 2048
-std::array<ThreadContext, MAX_THREADS> contexts;
-
-// Scratch register assigned by Pin to hold a pointer to the current thread's
-// context. Pin does register renaming, so this does not sacrifice a real
-// register. Allows single-instruction functions. This is the register index,
-// NOT the value of the pointer. When uncaptured, this register is nullptr.
-REG tcReg;
-
-// Scratch register used on switchcalls
-REG switchReg;
-
-// Callbacks, set on init
-TraceCallback traceCallback = nullptr;
-UncaptureCallback uncaptureCallback = nullptr;
-CaptureCallback captureCallback = nullptr;
-ThreadCallback threadStartCallback = nullptr;
-ThreadCallback threadEndCallback = nullptr;
-
-/* Tracing design: We interpose on all instrumentation (InsertCall) routines.
- * Instrumentation is done at trace granularity. We have regular and
- * exceptional traces. Exceptional traces are those that begin with a syscall
- * instruction (and, by definition, are single-instruction traces).
+/* Tracing design in fast-mode SPIN: We interpose on all instrumentation
+ * (InsertCall) routines. Instrumentation is done at trace granularity. We have
+ * regular and exceptional traces. Exceptional traces are those that begin with
+ * a syscall instruction (and, by definition, are single-instruction traces).
+ *
+ * NOTE(dsm): Description below is slightly outdated. Update, but in the
+ * interim, read the code.
  *
  * On regular traces, we add the following instrumentation to preserve the
  * register context:
@@ -159,12 +110,12 @@ ThreadCallback threadEndCallback = nullptr;
  *         SwitchHandler()
  *         jmpq %rax
  *
- * By convention (see spin.h), SwitchCall() returns the desired thread to real
- * rax (this is safe since we've written every app register).  SwitchHandler()
- * saves the current thread's rip, reads rax, verifies it's a legit thread,
- * changes tcReg to its ThreadContext, and sets rax to the new context's rip.
+ * By convention (see spin.h), SwitchCall() returns the desired thread to
+ * switchReg. SwitchHandler()  saves the current thread's rip, reads switchReg,
+ * verifies it's a legit thread,  changes tcReg to its ThreadContext, and sets
+ * switchReg to the new context's rip.
  *
- * SYSCALLS:
+ * SYSCALLS (FIXME: this should be in spin.cpp)
  *
  * Syscalls exist for two purposes: making the system useful and ruining our
  * day. To avoid confusing Linux, the executor can't take syscalls for other
@@ -220,6 +171,89 @@ ThreadCallback threadEndCallback = nullptr;
  *
  * Exceptions just exist to ruin everyone's day, and we don't handle them for now. TODO.
  */
+
+
+
+namespace spin {
+
+// Uncomment to do *expensive* context-to-register comparisons; only works on
+// single-threaded code, where registers and the actual context stay in sync.
+// Useful to catch bugs exhaustively in single-threaded code.
+// Breaks Pin with -inline 0 (Pin tries to spill FS, craps itself)
+//#define DEBUG_COMPARE_REGS
+
+// We want to be able to have switchcalls before the first instruction of a
+// basic block, which thankfully we can do at low overhead with multi-versioned
+// traces. A switchcall before the first instruction of a trace starts in mode
+// 0, and indirect-jumps to mode 0 so long as we're switching among threads. To
+// avoid an infinite loop, the moment the switchcall returns the same thread,
+// it jumps to version 1, which does not have the initial jump test. All
+// version 1 traces ALWAYS immediately jump to mode 0.
+#define TRACE_VERSION_DEFAULT (0)
+#define TRACE_VERSION_NOJUMP  (1)
+
+/* Thread context state */
+std::array<ThreadContext, MAX_THREADS> contexts;
+
+ThreadContext* GetTC(ThreadId tid) {
+    assert(tid < MAX_THREADS);
+    return &contexts[tid];
+}
+
+CONTEXT* GetPinCtxt(ThreadContext* tc) {
+    return &tc->pinCtxt;
+}
+
+// FIXME: Interface is kludgy; single-caller, cleaner to specialize spin.cpp
+void CoalesceContext(const CONTEXT* ctxt, ThreadContext* tc) {
+    // FIXME....
+    PIN_SaveContext(ctxt, &tc->pinCtxt);
+    
+    // RIP is the only valid ctxt reg that is out of date in tc
+    setReg(tc, REG_RIP, PIN_GetContextReg(ctxt, REG_RIP));
+    UpdatePinContext(tc);
+}
+
+/* Public context functions */
+uint64_t getReg(const ThreadContext* tc, REG reg) {
+    assert(tc);
+    reg = REG_FullRegName(reg);
+    if (reg == REG_RIP) return tc->rip;
+    if (reg == REG_RFLAGS) return tc->rflags;
+    uint32_t regIdx = (uint32_t)reg;
+    if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) return tc->gpRegs[regIdx - REG_GR_BASE];
+    if (regIdx >= REG_SEG_BASE && regIdx <= REG_SEG_LAST) return tc->gpRegs[regIdx - REG_SEG_BASE];
+    // NOTE: It's possible to support extra regs if you need them, but I don't
+    // want to get into >64-bit regs and I don't think we'll ever need them
+    panic("getReg(): Register %s (%d) not supported for now (edit me!)",
+             REG_StringShort(reg).c_str(), regIdx);
+    return -1l;
+}
+
+void setReg(ThreadContext* tc, REG reg, uint64_t val) {
+    assert(tc);
+    reg = REG_FullRegName(reg);
+    uint32_t regIdx = (uint32_t)reg;
+    if (reg == REG_RIP) {
+        tc->rip = val;
+    } else if (reg == REG_RFLAGS) {
+        tc->rflags = val;
+    } else if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) {
+        tc->gpRegs[regIdx - REG_GR_BASE] = val;
+    } else if (regIdx >= REG_SEG_BASE && regIdx <= REG_SEG_LAST) {
+        tc->gpRegs[regIdx - REG_SEG_BASE] = val;
+    } else {
+        panic("setReg(): Register %s (%d) not supported for now (edit me!)",
+                REG_StringShort(reg).c_str(), regIdx);
+    }
+}
+
+void executeAt(ThreadContext* tc, ADDRINT nextPc) {
+    setReg(tc, REG_RIP, nextPc);
+}
+
+
+/* Instrumentation */
 
 void X87Panic(ADDRINT pc) {
     panic("x87 instruction at PC 0x%lx. We do not handle x87. Recompile with -mno-80387 or use spin_slow.", pc);
@@ -425,26 +459,15 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
     for (uint32_t i = 0; i < REG_SEG_LAST-REG_SEG_BASE+1; i++) compRegs((REG)((int)REG_SEG_BASE + i), tc->segRegs[i], "seg");
 }
 
-ThreadContext* TraceGuard(THREADID tid, const CONTEXT* ctxt) {
-    info("[%d] In TraceGuard, RIP 0x%lx ctxt 0x%lx", tid, PIN_GetContextReg(ctxt, REG_RIP), &contexts[tid]);
-    if (tid) while(true) usleep(100);
-    return &contexts[tid];
-}
-
 uint64_t GetContextTid(const ThreadContext* tc) {
     return tc - &contexts[0];
 }
 
-void SyscallTraceGuard() {
-    info("In SyscallTraceGuard");
-}
-
-ADDRINT IsTCRegInvalid(const ThreadContext* tc) {
-    return (tc == nullptr);
-}
-
-ThreadContext* SwitchHandler(ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
+ThreadContext* SwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
     assert(tc);
+    if (NeedsSwitch(nextThreadId)) {
+        RecordSwitch(tid, tc, nextThreadId);
+    }
     WriteReg<REG_RIP>(tc, nextPC);
     assert(nextThreadId < MAX_THREADS);
     //info("Switch @ 0x%lx tc %lx", nextPC, (uintptr_t)tc);
@@ -511,7 +534,7 @@ std::string RegSetToStr(const std::set<REG> regs) {
     return ss.str();
 }
 
-void Trace(TRACE trace, VOID *v) {
+void Instrument(TRACE trace, const TraceInfo& pt) {
     // Order the trace's instructions
     std::vector<INS> idxToIns;
     for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
@@ -520,14 +543,15 @@ void Trace(TRACE trace, VOID *v) {
         }
     }
 
-    TraceInfo pt;
-    pt.firstIns = idxToIns[0];
-    pt.skipLeadingSwitchCall = (TRACE_Version(trace) == TRACE_VERSION_NOJUMP);
-    traceCallback(trace, pt);
-
     uint32_t traceInstrs = idxToIns.size();
     std::map<INS, uint32_t> insToIdx;
     for (uint32_t i = 0; i < traceInstrs; i++) insToIdx[idxToIns[i]] = i;
+
+    // If the first instruction is a syscall, DO ABSOLUTELY NOTHING.
+    // The syscall guard sets the right full context for the syscall, and the
+    // trace guard that runs immediately after refreshes the threadContext.
+    // This trace will only run the syscall instruction.
+    if (INS_IsSyscall(idxToIns[0])) return;
 
     // Find callpoint and switchpoint order
     struct IPoints {
@@ -589,7 +613,7 @@ void Trace(TRACE trace, VOID *v) {
         curEnd++;
     }
 
-#if 0
+#if 1
     info("trace ver %d", TRACE_Version(trace));
     for (auto seq : insSeqs) {
         uint32_t firstIdx = std::get<0>(seq);
@@ -612,15 +636,6 @@ void Trace(TRACE trace, VOID *v) {
     }
 #endif
 
-    // Insert the guard, predicated to reduce overheads (as it takes the context!)
-    if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
-        INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)IsTCRegInvalid, IARG_REG_VALUE, tcReg,
-                IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
-        INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard,
-                IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_RETURN_REGS, tcReg,
-                IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
-    }
-    
     // Refresh context register
     INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
             IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg,
@@ -687,7 +702,7 @@ void Trace(TRACE trace, VOID *v) {
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
         } else*/ if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
             // Save new tc to switchReg
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
             
             // Compare, return 1 on switchReg if they match (ie if we're not switching threads), otherwise leave switchReg untouched
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)CheckArgsMatch, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
@@ -731,167 +746,6 @@ void Trace(TRACE trace, VOID *v) {
     /*for (uint32_t idx = 0; idx < traceInstrs; idx++) {
         INS_InsertCall(idxToIns[idx], IPOINT_BEFORE, (AFUNPTR)PrintIns, IARG_ADDRINT, INS_Address(idxToIns[idx]), IARG_END);
     }*/
-
-    // TODO: Syscall breakup code. 
-}
-
-void SyscallEnter(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
-    //panic("syscall!");
-    ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);
-    assert(tc);
-    CopyToPinContext(tc, ctxt);
-    PIN_SetContextReg(ctxt, tcReg, (ADDRINT)tc);  // FIXME: Avoid spurious guards
-}
-
-void SyscallExit(THREADID tid, CONTEXT *ctxt, SYSCALL_STANDARD std, VOID *v) {
-    //info("syscall exit");
-    // dsm: The syscall might have changed ANYTHING. Do a full context write.
-    /*ThreadContext* tc = (ThreadContext*)PIN_GetContextReg(ctxt, tcReg);
-    assert(tc);*/
-    ThreadContext* tc = &contexts[tid];
-    InitContext(tc, ctxt);
-}
-
-ThreadContext* Capture(THREADID tid, CONTEXT* ctxt) {
-    ThreadContext* tc = &contexts[tid];
-    assert(tc->state == ThreadContext::UNCAPTURED);
-    assert(PIN_GetContextReg(ctxt, tcReg) == (ADDRINT)nullptr);
-
-    InitContext(tc, ctxt);
-    PIN_SetContextReg(ctxt, tcReg, (ADDRINT)tc);
-    tc->state = ThreadContext::IDLE;
-    __sync_synchronize();
-
-    assert(false);
-    // Let tool know this thread can now be used
-    //captureCallback(tid);
-
-    // Become executor or wait till uncaptured
-    //captureMutex.lock();
-#if 0
-    if (executorTid == -1) {
-        captureMutex.unlock();
-    } else {
-        captureMutex.unlock();
-        tc->waitMutex.lock();
-        if (tc->state == ThreadContext::UNCAPTURED) {
-        
-        }
-    }
-#endif
-    return nullptr;
-}
-
-
-void ThreadStart(THREADID tid, CONTEXT* ctxt, INT32 flags, VOID* v) {
-    info("Thread %d started", tid);
-    ThreadContext* tc = &contexts[tid];
-    PIN_SetContextReg(ctxt, tcReg, /*(ADDRINT)tc*/(ADDRINT)nullptr);
-    InitContext(tc, ctxt);
-
-    // HACK (dsm): For whatever reason, Pin does not seem to be fully
-    // transparent at the start of the program, and rflags goes askew on bit 1
-    // (which is reserved?). This ensures we don't panic when doing
-    // register checks.
-    tc->rflags = 0x202;
-
-    threadStartCallback(tid);
-}
-
-void ThreadFini(THREADID tid, const CONTEXT* ctxt, INT32 code, VOID* v) {
-    info("Thread %d finished", tid);
-    assert(contexts[tid].state == ThreadContext::UNCAPTURED);
-    threadEndCallback(tid);
-}
-
-/* Public interface */
-
-void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, CaptureCallback captureCb, UncaptureCallback uncaptureCb) {
-    traceCallback = traceCb;
-    threadStartCallback = startCb;
-    threadEndCallback = endCb;
-    captureCallback = captureCb;
-    uncaptureCallback = uncaptureCb;
-    
-    tcReg = PIN_ClaimToolRegister();
-    switchReg = PIN_ClaimToolRegister();
-    TRACE_AddInstrumentFunction(Trace, 0);
-    PIN_AddThreadStartFunction(ThreadStart, 0);
-    PIN_AddThreadFiniFunction(ThreadFini, 0);
-    PIN_AddSyscallEntryFunction(SyscallEnter, 0);
-    PIN_AddSyscallExitFunction(SyscallExit, 0);
-}
-
-uint64_t getReg(const ThreadContext* tc, REG reg) {
-    assert(tc);
-    reg = REG_FullRegName(reg);
-    if (reg == REG_RIP) return tc->rip;
-    if (reg == REG_RFLAGS) return tc->rflags;
-    uint32_t regIdx = (uint32_t)reg;
-    if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) return tc->gpRegs[regIdx - REG_GR_BASE];
-    if (regIdx >= REG_SEG_BASE && regIdx <= REG_SEG_LAST) return tc->gpRegs[regIdx - REG_SEG_BASE];
-    // NOTE: It's possible to support extra regs if you need them, but I don't
-    // want to get into >64-bit regs and I don't think we'll ever need them
-    panic("getReg(): Register %s (%d) not supported for now (edit me!)",
-             REG_StringShort(reg).c_str(), regIdx);
-    return -1l;
-}
-
-void setReg(ThreadContext* tc, REG reg, uint64_t val) {
-    assert(tc);
-    reg = REG_FullRegName(reg);
-    uint32_t regIdx = (uint32_t)reg;
-    if (reg == REG_RIP) {
-        tc->rip = val;
-    } else if (reg == REG_RFLAGS) {
-        tc->rflags = val;
-    } else if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) {
-        tc->gpRegs[regIdx - REG_GR_BASE] = val;
-    } else if (regIdx >= REG_SEG_BASE && regIdx <= REG_SEG_LAST) {
-        tc->gpRegs[regIdx - REG_SEG_BASE] = val;
-    } else {
-        panic("setReg(): Register %s (%d) not supported for now (edit me!)",
-                REG_StringShort(reg).c_str(), regIdx);
-    }
-}
-
-void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt) {
-    panic("Unimplemented in fast mode");
-}
-
-void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc) {
-    panic("Unimplemented in fast mode");
-}
-
-ThreadContext* getContext(ThreadId tid) {
-    panic("Unimplemented in fast mode");
-    return nullptr;
-}
-
-void executeAt(ThreadContext* tc, ADDRINT nextPc) {
-    setReg(tc, REG_RIP, nextPc);
-}
-
-REG __getContextReg() {
-    assert(traceCallback);  // o/w not initialized
-    return tcReg;
-}
-
-REG __getSwitchReg() {
-    assert(traceCallback);  // o/w not initialized
-    return switchReg;
-}
-
-void blockAfterSwitch() {
-    panic("Unimplemented");
-}
-
-void blockIdleThread(ThreadId tid) {
-    panic("Unimplemented");
-}
-
-void unblock(ThreadId tid) {
-    panic("Unimplemented");
 }
 
 }  // namespace spin

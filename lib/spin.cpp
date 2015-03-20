@@ -37,7 +37,7 @@
 #include "spin.h"
 #include "log.h"
 
-#define DEBUG(args...) //info(args)
+#define DEBUG(args...) info(args)
 
 // Pin's limit is 2Kthreads (as of 2.12)
 #define MAX_THREADS 2048
@@ -59,8 +59,7 @@ namespace spin {
 #ifdef SPIN_SLOW
 #include "slow_tracing.h"
 #else
-#error "fast doesn't work for now"
-//#include "fast_tracing.h"
+#include "fast_tracing.h"
 #endif
 
 namespace spin {
@@ -364,7 +363,7 @@ void InstrumentTrace(TRACE trace, VOID *v) {
 
     TraceInfo pt;
     pt.firstIns = firstIns;
-    pt.skipLeadingSwitchCall = INS_IsSyscall(pt.firstIns);
+    pt.skipLeadingSwitchCall = INS_IsSyscall(pt.firstIns) || TRACE_Version(trace) /*non-0 versions in spin-fast cannot have leading switchcalls*/;
     traceCallback(trace, pt);
     Instrument(trace, pt);
 }
@@ -399,6 +398,11 @@ ThreadContext* getContext(ThreadId tid) {
     assert(tid < MAX_THREADS);
     assert(threadStates[tid] == BLOCKED || threadStates[tid] == IDLE);
     return GetTC(tid);
+}
+
+REG __getContextReg() {
+    assert(traceCallback);  // o/w not initialized
+    return tcReg;
 }
 
 REG __getSwitchReg() {
