@@ -207,7 +207,7 @@ CONTEXT* GetPinCtxt(ThreadContext* tc) {
 // FIXME: Interface is kludgy; single-caller, cleaner to specialize spin.cpp
 void CoalesceContext(const CONTEXT* ctxt, ThreadContext* tc) {
     // FIXME....
-    PIN_SaveContext(ctxt, &tc->pinCtxt);
+    //PIN_SaveContext(ctxt, &tc->pinCtxt);
     
     // RIP is the only valid ctxt reg that is out of date in tc
     setReg(tc, REG_RIP, PIN_GetContextReg(ctxt, REG_RIP));
@@ -346,8 +346,8 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
          */
         if (r == REG_X87) continue;
         if (r >= REG_ST0 && r <= REG_ST7) {
-            //INS_InsertCall(ins, ipoint, (AFUNPTR)X87Panic, IARG_INST_PTR, IARG_END);
-            //continue;
+            INS_InsertCall(ins, ipoint, (AFUNPTR)X87Panic, IARG_INST_PTR, IARG_END);
+            continue;
         }
 
         // Misc regs
@@ -470,12 +470,12 @@ ThreadContext* SwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, AD
     }
     WriteReg<REG_RIP>(tc, nextPC);
     assert(nextThreadId < MAX_THREADS);
-    info("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextThreadId);
+    DEBUG("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextThreadId);
     return &contexts[nextThreadId];
 }
 
 ADDRINT XXSwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
-    info("FakeSwitch switchReg=%lx", nextThreadId);
+    DEBUG("FakeSwitch switchReg=%lx", nextThreadId);
     return nextThreadId;
 }
 
@@ -715,7 +715,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         // BBL. This way, we consistently run switchcalls once per successful
         // enqueue.
         if (idx > 0) {
-            info("instrumenting AT PC %lx", INS_Address(idxToIns[idx]));
+            DEBUG("instrumenting AT PC %lx", INS_Address(idxToIns[idx]));
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
