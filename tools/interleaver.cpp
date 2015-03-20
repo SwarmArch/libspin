@@ -51,8 +51,8 @@ uint32_t uncapture(spin::ThreadId tid, spin::ThreadContext* tc) {
     scoped_mutex sm(queueMutex);
     assert(!threadQueue.empty());  // spin should not call this with a single thread
     uint32_t next = threadQueue.front();
+    printf("Uncapture of tid %d, moving to %d q{%ld elems}[%d...%d]\n", tid, next, threadQueue.size(), threadQueue.front(), threadQueue.back());
     threadQueue.pop_front();
-    printf("Uncapture of tid %d, moving to %d\n", tid, next);
     switchCount++;
     return next;
 }
@@ -87,22 +87,27 @@ void countLoad() {
 
 bool shouldSwitch;
 
-uint32_t countInstrsAndSwitch(spin::ThreadId curTid, const spin::ThreadContext* tc, uint32_t instrs) {
-    insCount += instrs;
-    //printf("switchcall, %d\n", curTid);
-    uint32_t next = curTid;
+uint64_t countInstrsAndSwitch(spin::ThreadId curTid, const spin::ThreadContext* tc, ADDRINT curPc, uint32_t instrs, uint32_t ver, bool isTraceHead) {
+    //printf("switchcall, %d pc 0x%lx ver %d isTraceHead %d\n", curTid, curPc, ver, isTraceHead);
+    uint32_t nextTid = curTid;
     if (shouldSwitch) {
         scoped_mutex sm(queueMutex);
-        threadQueue.push_back(next);
-        next = threadQueue.front();
+        threadQueue.push_back(curTid);
+        nextTid = threadQueue.front();
         threadQueue.pop_front();
-        if (next != threadQueue.back()) {
-            //printf("switching to %d (%ld)\n", next, threadQueue.size());
+        if (nextTid != curTid) {
+            //printf("switching %d -> %d\n", curTid, nextTid);
             switchCount++;
         }
     }
+
     shouldSwitch = !shouldSwitch;
-    return next;
+
+    // Side-effects ONLY when we return the same tid
+    if (nextTid == curTid) {
+        insCount += instrs;
+    }
+    return nextTid;
 }
 
 void trace(TRACE trace, spin::TraceInfo& pt) {
@@ -112,12 +117,17 @@ void trace(TRACE trace, spin::TraceInfo& pt) {
             if (INS_HasMemoryRead2(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
         }
 
-        INS tgtIns = BBL_InsHead(bbl);
 #if 1
+        INS tgtIns = BBL_InsHead(bbl);
         //if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
         //if (!INS_Stutters(tailIns)) {
          pt.insertSwitchCall(tgtIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
-                    IARG_SPIN_THREAD_ID, IARG_SPIN_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
+                    IARG_SPIN_THREAD_ID,
+                    IARG_SPIN_CONST_CONTEXT,
+                    IARG_REG_VALUE, REG_RIP,
+                    IARG_UINT32, BBL_NumIns(bbl),
+                    IARG_UINT32, TRACE_Version(trace),
+                    IARG_UINT32, tgtIns == BBL_InsHead(TRACE_BblHead(trace)));
         //}
 #endif
         /*
