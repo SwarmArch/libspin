@@ -470,8 +470,13 @@ ThreadContext* SwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, AD
     }
     WriteReg<REG_RIP>(tc, nextPC);
     assert(nextThreadId < MAX_THREADS);
-    //info("Switch @ 0x%lx tc %lx", nextPC, (uintptr_t)tc);
+    info("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextThreadId);
     return &contexts[nextThreadId];
+}
+
+ADDRINT XXSwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
+    info("FakeSwitch switchReg=%lx", nextThreadId);
+    return nextThreadId;
 }
 
 ADDRINT GetPC(const ThreadContext* tc) {
@@ -613,7 +618,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         curEnd++;
     }
 
-#if 1
+#if 0
     info("trace ver %d", TRACE_Version(trace));
     for (auto seq : insSeqs) {
         uint32_t firstIdx = std::get<0>(seq);
@@ -638,8 +643,13 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
 
     // Refresh context register
     INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
-            IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg,
+            IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg,
             IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+    /*INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
+            IARG_ADDRINT, &contexts[17], IARG_RETURN_REGS, switchReg,
+            IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);
+    */
+
 
     // Insert reads and writes around instruction sequences
     // Reads: Last thing before first instr in sequence
@@ -655,7 +665,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
 #ifdef DEBUG_COMPARE_REGS
             // Do *expensive* context-to-register comparisons; only works on single-threaded code, where registers stay in sync
-            INS_InsertCall(idxToIns[lastIdx], IPOINT_AFTER, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+            INS_InsertCall(idxToIns[lastIdx], IPOINT_AFTER, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);
 #endif
         }
 
@@ -666,12 +676,20 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
                 FindInOutRegs(idxToIns, firstIdx, idx, inRegs, outRegs);
                 InsertRegWrites(idxToIns[idx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, outRegs);
 #ifdef DEBUG_COMPARE_REGS
-                INS_InsertCall(idxToIns[idx], IPOINT_TAKEN_BRANCH, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+                INS_InsertCall(idxToIns[idx], IPOINT_TAKEN_BRANCH, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);
 #endif
             }
         }
     }
-    
+
+ //FIXME!!   
+            // Immediately go back to version 0
+            for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
+                BBL_SetTargetVersion(bbl, TRACE_VERSION_DEFAULT);
+            }
+
+
+
     // Insert switchpoint handlers
     auto insertSwitchHandler = [&](uint32_t idx, IPOINT ipoint) {
         /* NOTE: Only IPOINT_BEFORE works for now:
@@ -696,18 +714,19 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         // should do the 0->1 jump all the time, not just at the start of the
         // BBL. This way, we consistently run switchcalls once per successful
         // enqueue.
-        /*if (idx > 0) {
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
+        if (idx > 0) {
+            info("instrumenting AT PC %lx", INS_Address(idxToIns[idx]));
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
-        } else*/ if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
+        } else if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
             // Save new tc to switchReg
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
             
             // Compare, return 1 on switchReg if they match (ie if we're not switching threads), otherwise leave switchReg untouched
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)CheckArgsMatch, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
 
-            // Switch to version 1 if switchReg == 1 (note this overload of switchReg is OK because no valid tc address will be 1-aligned
+            // Switch to version 1 if switchReg == 1 (note this overload of switchReg is OK because no valid tc address will be 1)
             INS_InsertVersionCase(idxToIns[idx], switchReg, 1, TRACE_VERSION_NOJUMP, IARG_END);
 
             // Otherwise, test failed, actually write tcReg and do the jump
@@ -716,6 +735,8 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
         } else {
             assert(TRACE_Version(trace) == TRACE_VERSION_NOJUMP);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)XXSwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            
             // Immediately go back to version 0
             for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
                 BBL_SetTargetVersion(bbl, TRACE_VERSION_DEFAULT);

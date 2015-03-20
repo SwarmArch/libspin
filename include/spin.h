@@ -71,8 +71,8 @@ namespace spin {
 
             template <typename ...Args>
             void insertSwitchCall(INS ins, IPOINT ipoint, AFUNPTR func, Args... args) {
-                switchpoints.push_back(std::make_tuple(ins, ipoint));
                 if (ins == firstIns && ipoint == IPOINT_BEFORE && skipLeadingSwitchCall) return;
+                switchpoints.push_back(std::make_tuple(ins, ipoint));
                 INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, __getSwitchReg() /*jump target*/, /*IARG_CALL_ORDER, CALL_ORDER_DEFAULT-1,*/ IARG_END);
             }
 

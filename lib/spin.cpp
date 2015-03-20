@@ -37,7 +37,7 @@
 #include "spin.h"
 #include "log.h"
 
-#define DEBUG(args...) info(args)
+#define DEBUG(args...) //info(args)
 
 // Pin's limit is 2Kthreads (as of 2.12)
 #define MAX_THREADS 2048
@@ -244,6 +244,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
             PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, tcReg)? 1 : 0);
  
     assert(executorTid == tid);
+    assert(curTid == PIN_GetContextReg(ctxt, tidReg));
 
     // Makes sure the thread's pinCtxt is fresh. Depending on the tracing mode,
     // ctxt may be valid or completely superfluous
