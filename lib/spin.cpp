@@ -429,9 +429,17 @@ void blockIdleThread(ThreadId tid) {
 void unblock(ThreadId tid) {
     executorMutex.lock();
     assert(tid < MAX_THREADS);
-    assert(threadStates[tid] == BLOCKED);
-    threadStates[tid] = IDLE;
-    capturedThreads++;
+    if (threadStates[tid] == BLOCKED) {
+        threadStates[tid] = IDLE;
+        capturedThreads++;
+    } else {
+        // An unblock fired right after a call to blockAfterSwitch. This makes
+        // blockAfterSwitch look functionally equivalent to being blocked
+        // TODO: Simplify interface: block() and unblock() for arbitrary threads!
+        assert(blockAfterSwitchcall);
+        assert(threadStates[tid] == RUNNING);
+        blockAfterSwitchcall = false;
+    }
     executorMutex.unlock();
 }
 
