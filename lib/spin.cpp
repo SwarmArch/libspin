@@ -37,6 +37,18 @@
 #include "spin.h"
 #include "log.h"
 
+#define DEBUG(args...) //info(args)
+
+// Pin's limit is 2Kthreads (as of 2.12)
+#define MAX_THREADS 2048
+
+/* State and functions common to fast and slow tracing */
+namespace spin {
+    REG tcReg;  // If executor, pointer to threadContext; o/w, null
+    REG tidReg; // If executor, tid of running thread
+    REG switchReg;  // Used on switches
+};
+
 /* Context state and tracing functions */
 #ifdef SPIN_SLOW
 #include "slow_tracing.h"
@@ -44,10 +56,6 @@
 #error "fast doesn't work for now"
 //#include "fast_tracing.h"
 #endif
-
-
-#define DEBUG(args...)
-//#define DEBUG(args...) info(args)
 
 namespace spin {
 
@@ -73,9 +81,6 @@ bool executorInSyscall;
 bool blockAfterSwitchcall;
 aligned_mutex executorMutex;
 
-REG executorReg;
-REG switchReg;
-
 // Callbacks, set on init
 TraceCallback traceCallback = nullptr;
 CaptureCallback captureCallback = nullptr;
@@ -90,7 +95,7 @@ void ThreadStart(THREADID tid, CONTEXT* ctxt, INT32 flags, VOID* v) {
     DEBUG("Thread %d started", tid);
     threadStartCallback(tid);
     assert(threadStates[tid] == UNCAPTURED);
-    PIN_SetContextReg(ctxt, executorReg, 0);  // will be captured immediately
+    PIN_SetContextReg(ctxt, tcReg, (ADDRINT)nullptr);  // will be captured immediately
     executorMutex.unlock();
 }
 
@@ -114,7 +119,7 @@ void ThreadFini(THREADID tid, const CONTEXT* ctxt, INT32 code, VOID* v) {
 
 // Helper method for guards. Must be called with executorMutex held
 void UncaptureAndSwitch() {
-    uint64_t nextTid = uncaptureCallback(curTid, (ThreadContext*)&contexts[curTid]);
+    uint64_t nextTid = uncaptureCallback(curTid, GetTC(curTid));
     if (nextTid >= MAX_THREADS) panic("Switchcall returned invalid tid %d", nextTid);
     if (threadStates[nextTid] != IDLE) {
         panic("Switchcall returned tid %d, which is not IDLE (state[%d] = %d, curTid = %d executorTid = %d)",
@@ -135,12 +140,15 @@ uint64_t RunTraceGuard(uint64_t executor) {
 
 // Runs only if we're coming back from a syscall
 void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
-    assert(PIN_GetContextReg(ctxt, executorReg) == 0);
+    assert(PIN_GetContextReg(ctxt, tcReg) == (ADDRINT)nullptr);
     DEBUG("[%d] In TraceGuard() (curTid %d rip 0x%lx er %d) [%d %d %d]", tid, curTid,
-            PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, executorReg),
+            PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, tcReg),
             threadStates[0], threadStates[1], threadStates[2]);
     executorMutex.lock();
-    PIN_SaveContext(ctxt, &contexts[tid]);
+
+    ThreadContext* tc = GetTC(tid);
+    InitContext(ctxt, tc);
+    CONTEXT* pinCtxt = GetPinCtxt(tc);  // guaranteed fresh :)
     
     if (threadStates[tid] == RUNNING) {
         // We did not yield executor role when we ran the syscall, so keep
@@ -151,9 +159,9 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         executorInSyscall = false;
         DEBUG("[%d] TG: Single thread, becoming executor", tid);
         executorMutex.unlock();
-        PIN_SetContextReg(&contexts[tid], executorReg, 1);
-        PIN_SetContextReg(&contexts[tid], switchReg, curTid);
-        PIN_ExecuteAt(&contexts[tid]);
+        PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
+        PIN_SetContextReg(pinCtxt, tidReg, curTid);
+        PIN_ExecuteAt(pinCtxt);
     }
 
     assert(threadStates[tid] == UNCAPTURED);
@@ -190,9 +198,9 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
             // Take syscall
             DEBUG("[%d] TG: Wakeup, taking own syscall", tid);
             executorMutex.unlock();
-            PIN_SetContextReg(&contexts[tid], executorReg, 0);
-            PIN_SetContextReg(&contexts[tid], switchReg, -1);
-            PIN_ExecuteAt(&contexts[tid]);
+            PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
+            PIN_SetContextReg(pinCtxt, tidReg, -1);
+            PIN_ExecuteAt(pinCtxt);
         } else if (executorTid == -1u) {
             // NOTE: Due to wakeups interleaving with uncaptures, we can have
             // multiple threads going for the executor. For example, this
@@ -213,9 +221,12 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     assert(curTid < MAX_THREADS);
     DEBUG("[%d] TG: Becoming executor, (curTid = %d, capturedThreads = %d)", tid, curTid, capturedThreads);
     executorMutex.unlock();
-    PIN_SetContextReg(&contexts[curTid], executorReg, 1);
-    PIN_SetContextReg(&contexts[curTid], switchReg, curTid);
-    PIN_ExecuteAt(&contexts[curTid]);
+
+    tc = GetTC(curTid);
+    pinCtxt = GetPinCtxt(tc);
+    PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
+    PIN_SetContextReg(pinCtxt, tidReg, curTid);
+    PIN_ExecuteAt(pinCtxt);
 }
 
 uint64_t RunSyscallGuard(uint64_t executor) {
@@ -225,10 +236,13 @@ uint64_t RunSyscallGuard(uint64_t executor) {
 void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     executorMutex.lock();
     DEBUG("[%d] In SyscallGuard() (curTid %d rip 0x%lx er %d)", tid, curTid,
-            PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, executorReg));
+            PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, tcReg)? 1 : 0);
  
     assert(executorTid == tid);
-    PIN_SaveContext(ctxt, &contexts[curTid]);
+
+    // Makes sure the thread's pinCtxt is fresh. Depending on the tracing mode,
+    // ctxt may be valid or completely superfluous
+    CoalesceContext(ctxt, GetTC(curTid));
 
     // Three possibilities:
     if (curTid != tid) {
@@ -239,9 +253,12 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         waitLocks[wakeTid].unlock();  // wake syscall taker
         DEBUG("[%d] SG: Shipping syscall to real tid %d, running %d", tid, wakeTid, curTid);
         executorMutex.unlock();
-        PIN_SetContextReg(&contexts[curTid], executorReg, 1);
-        PIN_SetContextReg(&contexts[curTid], switchReg, curTid);
-        PIN_ExecuteAt(&contexts[curTid]);
+
+        ThreadContext* tc = GetTC(curTid);
+        CONTEXT* pinCtxt = GetPinCtxt(tc);
+        PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
+        PIN_SetContextReg(pinCtxt, tidReg, curTid);
+        PIN_ExecuteAt(pinCtxt);
     } else {
         // We ourselves need to take the syscall...
         if (capturedThreads >= 2) {
@@ -263,10 +280,13 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         }
         
         executorMutex.unlock();
+
         // Take our syscall
-        PIN_SetContextReg(&contexts[tid], executorReg, 0);
-        PIN_SetContextReg(&contexts[tid], switchReg, -1);
-        PIN_ExecuteAt(&contexts[tid]);
+        ThreadContext* tc = GetTC(tid);
+        CONTEXT* pinCtxt = GetPinCtxt(tc);
+        PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
+        PIN_SetContextReg(pinCtxt, tidReg, -1);
+        PIN_ExecuteAt(pinCtxt);
     }
 }
 
@@ -274,10 +294,10 @@ uint64_t NeedsSwitch(uint64_t nextTid) {
     return (nextTid != curTid) | blockAfterSwitchcall;
 }
 
-void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
-    uint32_t nextTid = PIN_GetContextReg(ctxt, switchReg);
+// Split switch functionality (TODO: move relevant fraction to tracing files)
+void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     executorMutex.lock();
-    if (PIN_GetContextReg(ctxt, executorReg) != 1) {
+    if (!tc) {
         panic("[%d] I was supposed to be the executor?? But it's %d", tid, executorTid);
     }
     if (blockAfterSwitchcall && nextTid == curTid) {
@@ -292,10 +312,6 @@ void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
                 nextTid, (nextTid < MAX_THREADS)? threadStates[nextTid] : -1);
     }
 
-    PIN_SaveContext(ctxt, &contexts[curTid]);
-    PIN_SetContextReg(&contexts[curTid], executorReg, 0);
-    PIN_SetContextReg(&contexts[curTid], switchReg, -1);
-
     DEBUG("[%d] Switching %d -> %d", tid, curTid, nextTid);
     assert(threadStates[curTid] == RUNNING);
     if (!blockAfterSwitchcall) {
@@ -309,11 +325,22 @@ void SwitchHandler(THREADID tid, const CONTEXT* ctxt) {
     curTid = nextTid;
     threadStates[curTid] = RUNNING;
     executorMutex.unlock();
-    PIN_SetContextReg(&contexts[curTid], executorReg, 1);
-    PIN_SetContextReg(&contexts[curTid], switchReg, curTid);
-    PIN_ExecuteAt(&contexts[curTid]);
 }
 
+void PerformSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid, const CONTEXT* ctxt) {
+    RecordSwitch(tid, tc, nextTid);
+
+    CoalesceContext(ctxt, tc);
+    CONTEXT* pinCtxt = GetPinCtxt(tc);
+    PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
+    PIN_SetContextReg(pinCtxt, tidReg, -1);
+
+    ThreadContext* nextTc = GetTC(nextTid);
+    CONTEXT* nextPinCtxt = GetPinCtxt(nextTc);
+    PIN_SetContextReg(nextPinCtxt, tcReg, (ADDRINT)nextTc);
+    PIN_SetContextReg(nextPinCtxt, tidReg, curTid);
+    PIN_ExecuteAt(nextPinCtxt);
+}
 
 /* Tracing */
 
@@ -333,7 +360,7 @@ void Trace(TRACE trace, VOID *v) {
 
     if (!INS_IsSyscall(idxToIns[0])) {
         INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)RunTraceGuard,
-                IARG_REG_VALUE, executorReg,
+                IARG_REG_VALUE, tcReg,
                 IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
         INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard,
                 IARG_THREAD_ID, IARG_CONST_CONTEXT, 
@@ -344,7 +371,7 @@ void Trace(TRACE trace, VOID *v) {
     for (INS ins : idxToIns) {
         if (INS_IsSyscall(ins)) {
             INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)RunSyscallGuard,
-                    IARG_REG_VALUE, executorReg,
+                    IARG_REG_VALUE, tcReg,
                     IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
             INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SyscallGuard,
                     IARG_THREAD_ID, IARG_CONST_CONTEXT, 
@@ -370,8 +397,11 @@ void Trace(TRACE trace, VOID *v) {
         // Will be added right after the switchcall
         INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)NeedsSwitch,
                 IARG_REG_VALUE, switchReg, IARG_END);
-        INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR) SwitchHandler,
-                IARG_THREAD_ID, IARG_CONST_CONTEXT, IARG_END);
+        INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)PerformSwitch,
+                IARG_THREAD_ID,
+                IARG_REG_VALUE, tcReg,
+                IARG_REG_VALUE, switchReg,
+                IARG_CONST_CONTEXT, IARG_END);
     }
 }
 
@@ -392,7 +422,8 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     captureCallback = captureCb;
     uncaptureCallback = uncaptureCb;
     
-    executorReg = PIN_ClaimToolRegister();
+    tcReg = PIN_ClaimToolRegister();
+    tidReg = PIN_ClaimToolRegister();
     switchReg = PIN_ClaimToolRegister();
 
     TRACE_AddInstrumentFunction(Trace, 0);
@@ -400,38 +431,20 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     PIN_AddThreadFiniFunction(ThreadFini, 0);
 }
 
-uint64_t getReg(const ThreadContext* tc, REG reg) {
-    return PIN_GetContextReg((const CONTEXT*)tc, reg);
-}
-
-void setReg(ThreadContext* tc, REG reg, uint64_t val) {
-    PIN_SetContextReg((CONTEXT*)tc, reg, val);
-}
-
-void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt) {
-    PIN_SaveContext((const CONTEXT*)tc, pinCtxt);
-}
-
-void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc) {
-    PIN_SaveContext(pinCtxt, (CONTEXT*)tc);
-}
-
 ThreadContext* getContext(ThreadId tid) {
     assert(tid < MAX_THREADS);
     assert(threadStates[tid] == BLOCKED || threadStates[tid] == IDLE);
-    return (ThreadContext*)&contexts[tid];
-}
-
-void executeAt(ThreadContext* tc, ADDRINT nextPc) {
-    ADDRINT curPc = getReg(tc, REG_RIP);
-    assert(nextPc != curPc);  // will enter an infinite loop otherwise
-    setReg(tc, REG_RIP, nextPc);
-    PIN_ExecuteAt((CONTEXT*)tc);
+    return GetTC(tid);
 }
 
 REG __getSwitchReg() {
     assert(traceCallback);  // o/w not initialized
     return switchReg;
+}
+
+REG __getTidReg() {
+    assert(traceCallback);  // o/w not initialized
+    return tidReg;
 }
 
 void blockAfterSwitch() {

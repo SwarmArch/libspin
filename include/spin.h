@@ -35,7 +35,7 @@
 #define IARG_SPIN_CONST_CONTEXT IARG_REG_VALUE, spin::__getContextReg()
 #define IARG_SPIN_CONTEXT IARG_REG_VALUE, spin::__getContextReg()
 #endif
-#define IARG_SPIN_THREAD_ID IARG_REG_VALUE, spin::__getSwitchReg()
+#define IARG_SPIN_THREAD_ID IARG_REG_VALUE, spin::__getTidReg()
 
 namespace spin {
     // Types
@@ -51,6 +51,7 @@ namespace spin {
 #ifndef SPIN_SLOW
     REG __getContextReg();
 #endif
+    REG __getTidReg();
     REG __getSwitchReg();
 
     // Instrumentation: all analysis functions must be registered through this interface
@@ -87,10 +88,10 @@ namespace spin {
     // Context querying/manipulation methods
     uint64_t getReg(const ThreadContext* tc, REG reg);
     void setReg(ThreadContext* tc, REG reg, uint64_t val);
-    void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt);
-    void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc);
+    //void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt);
+    //void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc);
 
-    // NOTE: tid must be != running tid
+    // NOTE: tid must be != running tid, otherwise this context will be stale!
     ThreadContext* getContext(ThreadId tid);
 
     /* If you modify the current ThreadContext in a switchcall, you must call
