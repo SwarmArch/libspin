@@ -76,7 +76,8 @@ namespace spin {
                 INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, __getSwitchReg() /*jump target*/, /*IARG_CALL_ORDER, CALL_ORDER_DEFAULT-1,*/ IARG_END);
             }
 
-            friend void Trace(TRACE trace, VOID* v);
+            friend void InstrumentTrace(TRACE trace, VOID* v);
+            friend void Instrument(TRACE trace, const TraceInfo& pt);
     };
 
     typedef void (*TraceCallback)(TRACE, TraceInfo&);

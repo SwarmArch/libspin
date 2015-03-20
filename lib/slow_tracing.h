@@ -34,7 +34,7 @@
  */
 
 namespace spin {
-// Thread context state
+/* Thread context state */
 std::array<CONTEXT, MAX_THREADS> contexts;
 
 ThreadContext* GetTC(ThreadId tid) {
@@ -54,7 +54,7 @@ void CoalesceContext(const CONTEXT* ctxt, ThreadContext* tc) {
     InitContext(ctxt, tc);
 }
 
-// Public context functions
+/* Public context functions */
 uint64_t getReg(const ThreadContext* tc, REG reg) {
     return PIN_GetContextReg((const CONTEXT*)tc, reg);
 }
@@ -68,6 +68,51 @@ void executeAt(ThreadContext* tc, ADDRINT nextPc) {
     assert(nextPc != curPc);  // will enter an infinite loop otherwise
     setReg(tc, REG_RIP, nextPc);
     PIN_ExecuteAt((CONTEXT*)tc);
+}
+
+/* Instrumentation */
+void SwitchHandler(THREADID tid, ThreadContext* tc, uint64_t nextTid, const CONTEXT* ctxt) {
+    RecordSwitch(tid, tc, nextTid);
+
+    CoalesceContext(ctxt, tc);
+    CONTEXT* pinCtxt = GetPinCtxt(tc);
+    PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
+    PIN_SetContextReg(pinCtxt, tidReg, -1);
+
+    ThreadContext* nextTc = GetTC(nextTid);
+    CONTEXT* nextPinCtxt = GetPinCtxt(nextTc);
+    PIN_SetContextReg(nextPinCtxt, tcReg, (ADDRINT)nextTc);
+    PIN_SetContextReg(nextPinCtxt, tidReg, nextTid);
+    PIN_ExecuteAt(nextPinCtxt);
+}
+
+void Instrument(TRACE trace, const TraceInfo& pt) {
+    INS firstIns = BBL_InsHead(TRACE_BblHead(trace));
+
+    // Add switch handlers
+    // NOTE: For now, this is just a post-handler, but if we find we need to
+    // modify the context in the switchcall (e.g., write arguments etc), we can
+    // save the context first, pass our internal copy to the switchcall, then
+    // run ExecuteAt.
+    for (auto iip : pt.switchpoints) {
+        INS ins = std::get<0>(iip);
+        IPOINT ipoint = std::get<1>(iip);
+        if (ipoint != IPOINT_BEFORE) {
+            // We can probably do AFTER and TAKEN_BRANCH in slow mode, but
+            // they're difficult to do in fast mode.
+            panic("Switchcalls only support IPOINT_BEFORE for now");
+        }
+
+        if (ins == firstIns && INS_IsSyscall(ins)) continue;
+        // Will be added right after the switchcall
+        INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)NeedsSwitch,
+                IARG_REG_VALUE, switchReg, IARG_END);
+        INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SwitchHandler,
+                IARG_THREAD_ID,
+                IARG_REG_VALUE, tcReg,
+                IARG_REG_VALUE, switchReg,
+                IARG_CONST_CONTEXT, IARG_END);
+    }
 }
 
 }  // namespace spin

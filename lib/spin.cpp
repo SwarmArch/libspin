@@ -45,8 +45,14 @@
 /* State and functions common to fast and slow tracing */
 namespace spin {
     REG tcReg;  // If executor, pointer to threadContext; o/w, null
-    REG tidReg; // If executor, tid of running thread
+    REG tidReg;  // If executor, tid of running thread
     REG switchReg;  // Used on switches
+
+    // Tracing routines need to be predicated on NeedsSwitch (which is
+    // guaranteed to inline), and must call RecordSwitch to keep the executor
+    // logic in sync.
+    uint64_t NeedsSwitch(uint64_t nextTid);
+    void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid);
 };
 
 /* Context state and tracing functions */
@@ -294,7 +300,6 @@ uint64_t NeedsSwitch(uint64_t nextTid) {
     return (nextTid != curTid) | blockAfterSwitchcall;
 }
 
-// Split switch functionality (TODO: move relevant fraction to tracing files)
 void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     executorMutex.lock();
     if (!tc) {
@@ -327,82 +332,41 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     executorMutex.unlock();
 }
 
-void PerformSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid, const CONTEXT* ctxt) {
-    RecordSwitch(tid, tc, nextTid);
+/* Instrumentation */
 
-    CoalesceContext(ctxt, tc);
-    CONTEXT* pinCtxt = GetPinCtxt(tc);
-    PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
-    PIN_SetContextReg(pinCtxt, tidReg, -1);
-
-    ThreadContext* nextTc = GetTC(nextTid);
-    CONTEXT* nextPinCtxt = GetPinCtxt(nextTc);
-    PIN_SetContextReg(nextPinCtxt, tcReg, (ADDRINT)nextTc);
-    PIN_SetContextReg(nextPinCtxt, tidReg, curTid);
-    PIN_ExecuteAt(nextPinCtxt);
-}
-
-/* Tracing */
-
-void Trace(TRACE trace, VOID *v) {
-    // Order the trace's instructions
-    std::vector<INS> idxToIns;
-    for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
-        for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
-            idxToIns.push_back(ins);
-        }
-    }
-
-    TraceInfo pt;
-    pt.firstIns = idxToIns[0];
-    pt.skipLeadingSwitchCall = INS_IsSyscall(pt.firstIns);
-    traceCallback(trace, pt);
-
-    if (!INS_IsSyscall(idxToIns[0])) {
-        INS_InsertIfCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)RunTraceGuard,
+void InstrumentTrace(TRACE trace, VOID *v) {
+    INS firstIns = BBL_InsHead(TRACE_BblHead(trace));
+    bool isSyscallTrace = INS_IsSyscall(firstIns);
+    
+    // Trace guard
+    if (!isSyscallTrace) {
+        INS_InsertIfCall(firstIns, IPOINT_BEFORE, (AFUNPTR)RunTraceGuard,
                 IARG_REG_VALUE, tcReg,
                 IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
-        INS_InsertThenCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)TraceGuard,
+        INS_InsertThenCall(firstIns, IPOINT_BEFORE, (AFUNPTR)TraceGuard,
                 IARG_THREAD_ID, IARG_CONST_CONTEXT, 
                 IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
     }
 
-    // Syscall guard
-    for (INS ins : idxToIns) {
-        if (INS_IsSyscall(ins)) {
-            INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)RunSyscallGuard,
-                    IARG_REG_VALUE, tcReg,
-                    IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
-            INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SyscallGuard,
-                    IARG_THREAD_ID, IARG_CONST_CONTEXT, 
-                    IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+    // Syscall guards
+    for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
+        for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
+            if (INS_IsSyscall(ins)) {
+                INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)RunSyscallGuard,
+                        IARG_REG_VALUE, tcReg,
+                        IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+                INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SyscallGuard,
+                        IARG_THREAD_ID, IARG_CONST_CONTEXT, 
+                        IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+            }
         }
     }
 
-    // Switch handler
-    // NOTE: For now, this is just a post-handler, but if we find we need to
-    // modify the context in the switchcall (e.g., write arguments etc), we can
-    // save the context first, pass our internal copy to the switchcall, then
-    // run ExecuteAt.
-    for (auto iip : pt.switchpoints) {
-        INS ins = std::get<0>(iip);
-        IPOINT ipoint = std::get<1>(iip);
-        if (ipoint != IPOINT_BEFORE) {
-            // We can probably do AFTER and TAKEN_BRANCH in slow mode, but
-            // they're difficult to do in fast mode.
-            panic("Switchcalls only support IPOINT_BEFORE for now");
-        }
-
-        if (ins == idxToIns[0] && INS_IsSyscall(ins)) continue;
-        // Will be added right after the switchcall
-        INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)NeedsSwitch,
-                IARG_REG_VALUE, switchReg, IARG_END);
-        INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)PerformSwitch,
-                IARG_THREAD_ID,
-                IARG_REG_VALUE, tcReg,
-                IARG_REG_VALUE, switchReg,
-                IARG_CONST_CONTEXT, IARG_END);
-    }
+    TraceInfo pt;
+    pt.firstIns = firstIns;
+    pt.skipLeadingSwitchCall = INS_IsSyscall(pt.firstIns);
+    traceCallback(trace, pt);
+    Instrument(trace, pt);
 }
 
 /* Public interface */
@@ -426,7 +390,7 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     tidReg = PIN_ClaimToolRegister();
     switchReg = PIN_ClaimToolRegister();
 
-    TRACE_AddInstrumentFunction(Trace, 0);
+    TRACE_AddInstrumentFunction(InstrumentTrace, 0);
     PIN_AddThreadStartFunction(ThreadStart, 0);
     PIN_AddThreadFiniFunction(ThreadFini, 0);
 }
