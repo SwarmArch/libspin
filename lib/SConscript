@@ -28,5 +28,5 @@ else:
     libEnv = env
 
 lib = libEnv.StaticLibrary(target='libspin_{}.a'.format(speed),
-                           source='spin_{}.cpp'.format(speed))
+                           source='spin.cpp')
 Return('lib')

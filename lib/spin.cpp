@@ -32,25 +32,25 @@
 #include <sstream>
 #include <unistd.h>
 
-#ifndef SPIN_SLOW
-#error "You must compile this file with SPIN_SLOW"
-#endif
-
 #include "mutex.h"
 #include "assert.h"
 #include "spin.h"
 #include "log.h"
+
+/* Context state and tracing functions */
+#ifdef SPIN_SLOW
+#include "slow_tracing.h"
+#else
+#error "fast doesn't work for now"
+//#include "fast_tracing.h"
+#endif
+
 
 #define DEBUG(args...)
 //#define DEBUG(args...) info(args)
 
 namespace spin {
 
-// Thread context state (2Kthreads is Pin's current limit)
-#define MAX_THREADS 2048
-std::array<CONTEXT, MAX_THREADS> contexts;
-
-// FIXME: Shared with spin_fast.cpp!! Move to common file.
 enum ThreadState  {
     UNCAPTURED, // Out in a syscall or other point out of our control. Will trip a capture point when it comes back to Pin; will trip before any other instrumentation function.
     BLOCKED,    // In program code, but blocked by the tool
@@ -82,20 +82,6 @@ CaptureCallback captureCallback = nullptr;
 UncaptureCallback uncaptureCallback = nullptr;
 ThreadCallback threadStartCallback = nullptr;
 ThreadCallback threadEndCallback = nullptr;
-
-/* Tracing design in slow-mode SPIN (see the fast-mode comment first)
- *
- * Slow mode is ~100x slower than fast mode, but more robust and simpler.
- *
- * In slow mode, each normal analysis call works as-is without any extra
- * instrumentation. Each switchcall returns the next thread to run, and a
- * trailing SwitchHandler() uses SLOW PIN_ExecuteAt to switch to it.
- * 
- * Most of the smarts in slow-mode SPIN are in handling syscalls, which is
- * similar to fast-mode but without the context copies. As in fast mode,
- * a guard at the start of every trace handles captures, and syscalls are
- * prefaced with uncapture callbacks.
- */
 
 /* Capture, uncapture, and executor handling */
 

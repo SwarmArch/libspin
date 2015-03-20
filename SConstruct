@@ -90,7 +90,7 @@ genericToolEnv = pinEnv.Clone()
 # FIXME: Adding lib/ for mutex.h; tools should use a queue instead
 genericToolEnv.Append(CPPPATH = [os.path.abspath("lib")])
 
-speeds = ['slow'] + (['fast'] if isAvxAvailable else [])
+speeds = ['slow'] #+ (['fast'] if isAvxAvailable else [])
 for speed in speeds:
     spinLib = SConscript('lib/SConscript',
         variant_dir = os.path.join('build', mode, 'lib'),

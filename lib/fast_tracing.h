@@ -221,6 +221,9 @@ ThreadCallback threadEndCallback = nullptr;
  * Exceptions just exist to ruin everyone's day, and we don't handle them for now. TODO.
  */
 
+void X87Panic(ADDRINT pc) {
+    panic("x87 instruction at PC 0x%lx. We do not handle x87. Recompile with -mno-80387 or use spin_slow.", pc);
+}
 
 /* Context read/write instrumentation */
 
@@ -308,7 +311,10 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
          * This is complete madness, might as well use ExecuteAt at that point.
          */
         if (r == REG_X87) continue;
-        if (r >= REG_ST0 && r <= REG_ST7) continue;
+        if (r >= REG_ST0 && r <= REG_ST7) {
+            //INS_InsertCall(ins, ipoint, (AFUNPTR)X87Panic, IARG_INST_PTR, IARG_END);
+            //continue;
+        }
 
         // Misc regs
         info("Generic RegRead %s", REG_StringShort(r).c_str());
@@ -387,12 +393,15 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
             continue;
         }
 
+        // NOTE(dsm): See X87 comment above
+        if (r == REG_X87) continue;
+        if (r >= REG_ST0 && r <= REG_ST7) {
+            INS_InsertCall(ins, ipoint, (AFUNPTR)X87Panic, IARG_INST_PTR, IARG_END);
+            continue;
+        }
+
         // Misc regs
         info("Generic RegWrite %s", REG_StringShort(r).c_str());
-        
-        // FIXME(dsm): See X87 comment above
-        if (r == REG_X87) continue;
-        if (r >= REG_ST0 && r <= REG_ST7) continue;
 
         fp = (AFUNPTR)WriteGenericReg;
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);

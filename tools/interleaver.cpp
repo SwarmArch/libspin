@@ -112,13 +112,13 @@ void trace(TRACE trace, spin::TraceInfo& pt) {
             if (INS_HasMemoryRead2(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
         }
 
-        INS tailIns = BBL_InsTail(bbl);
+        INS tgtIns = BBL_InsHead(bbl);
 #if 1
         //if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
-        if (!INS_Stutters(tailIns)) {
-         pt.insertSwitchCall(tailIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
+        //if (!INS_Stutters(tailIns)) {
+         pt.insertSwitchCall(tgtIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
                     IARG_SPIN_THREAD_ID, IARG_SPIN_CONST_CONTEXT, IARG_UINT32, BBL_NumIns(bbl));
-        }
+        //}
 #endif
         /*
         if (INS_IsBranchOrCall(tailIns) || INS_IsRet(tailIns)) {
