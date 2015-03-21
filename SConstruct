@@ -87,8 +87,6 @@ pinEnv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
     '-Wl,--version-script=' + pinverspath, '-Wl,-Bsymbolic', '-shared'])
 
 genericToolEnv = pinEnv.Clone()
-# FIXME: Adding lib/ for mutex.h; tools should use a queue instead
-genericToolEnv.Append(CPPPATH = [os.path.abspath("lib")])
 
 speeds = ['slow'] + (['fast'] if isAvxAvailable else [])
 for speed in speeds:
