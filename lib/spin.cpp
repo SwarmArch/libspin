@@ -413,7 +413,7 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
 
     TRACE_AddInstrumentFunction(InstrumentTrace, 0);
     PIN_AddThreadStartFunction(ThreadStart, 0);
-    //PIN_AddThreadFiniFunction(ThreadFini, 0);
+    PIN_AddThreadFiniFunction(ThreadFini, 0);
 }
 
 ThreadContext* getContext(ThreadId tid) {
