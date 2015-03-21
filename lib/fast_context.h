@@ -120,9 +120,8 @@ template <> inline ADDRINT ReadReg<REG_SEG_FS>(const ThreadContext* tc) { CHECK_
 template <> inline ADDRINT ReadReg<REG_SEG_GS>(const ThreadContext* tc) { CHECK_TC(tc); return tc->gs; }
 
 // Get this: If these are inlined, Pin fails silently. So have a panic to ensure they do NOT inline
-template <> inline ADDRINT ReadReg<REG_SEG_FS_BASE>(const ThreadContext* tc) { if (!tc) panic("WFT PIN"); return tc->fsBase; }
-template <> inline ADDRINT ReadReg<REG_SEG_GS_BASE>(const ThreadContext* tc) { if (!tc) panic("WFT PIN"); return tc->gsBase; }
-
+template <> inline ADDRINT ReadReg<REG_SEG_FS_BASE>(const ThreadContext* tc) { if (!tc) panic("Prevent Pin from inlining"); return tc->fsBase; }
+template <> inline ADDRINT ReadReg<REG_SEG_GS_BASE>(const ThreadContext* tc) { if (!tc) panic("Prevent Pin from inlining"); return tc->gsBase; }
 
 template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc) {
     CHECK_TC(tc);

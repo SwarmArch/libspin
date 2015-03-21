@@ -172,8 +172,6 @@
  * Exceptions just exist to ruin everyone's day, and we don't handle them for now. TODO.
  */
 
-
-
 namespace spin {
 
 // Uncomment to do *expensive* context-to-register comparisons; only works on
@@ -336,9 +334,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
             continue;
         }
 
-        /* X87, God save the Queen
-         *
-         * X87 sucks, and Pin handling of X87 sucks even more (e.g., REG_X87 is
+        /* X87 sucks, and Pin handling of X87 sucks even more (e.g., REG_X87 is
          * a register that no APIs can access according to reg_ia32.PH, and the
          * Get/SetRegval APIs don't work for ST0-7...)
          *
@@ -346,6 +342,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
          * 2. ST0-7 ...??? If we can't pass by ref, reads we could do with
          * GetContextFPState, but stores? Do we restore the whole FP state? And
          * do that before all other reads, so that XMM reads work OK?
+         * 
          * This is complete madness, might as well use ExecuteAt at that point.
          */
         if (r == REG_X87) continue;
@@ -355,7 +352,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
         }
 
         // Misc regs
-        //info("Generic RegRead %s", REG_StringShort(r).c_str());
+        info("Generic RegRead %s", REG_StringShort(r).c_str());
         
         fp = (AFUNPTR)ReadGenericReg;
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
@@ -477,19 +474,17 @@ ThreadContext* SwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, AD
     UpdatePinContext(tc);
     assert(nextThreadId < MAX_THREADS);
     DEBUG("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextThreadId);
-    
-    return &contexts[nextThreadId];
 
-    // MAKES everything work... GRRRR
-    /*PIN_SetContextReg(&contexts[nextThreadId].pinCtxt, tcReg, (ADDRINT)&contexts[nextThreadId]);
+#if 1 
+    return &contexts[nextThreadId];
+#else
+    // If you see corruption in registers, try this to do full-context swaps
+    // (you can then use CompareRegs even with multiple threads)
+    PIN_SetContextReg(&contexts[nextThreadId].pinCtxt, tcReg, (ADDRINT)&contexts[nextThreadId]);
     PIN_SetContextReg(&contexts[nextThreadId].pinCtxt, tidReg, nextThreadId);
     PIN_ExecuteAt(&contexts[nextThreadId].pinCtxt);
-    return nullptr;*/
-}
-
-ADDRINT XXSwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
-    DEBUG("FakeSwitch switchReg=%lx", nextThreadId);
-    return nextThreadId;
+    return nullptr;
+#endif
 }
 
 ADDRINT GetPC(const ThreadContext* tc) {
@@ -542,10 +537,6 @@ void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t 
     // for now, do the simple thing and always read the regs written
     for (REG r : outRegs) inRegs.insert(r);
     //for (REG r : inRegs) outRegs.insert(r);
-}
-
-void PrintIns(ADDRINT pc) {
-    //info(" 0x%lx", pc);
 }
 
 std::string RegSetToStr(const std::set<REG> regs) {
@@ -635,7 +626,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         curEnd++;
     }
 
-#if 1
+#if 0
     info("trace ver %d", TRACE_Version(trace));
     for (auto seq : insSeqs) {
         uint32_t firstIdx = std::get<0>(seq);
@@ -665,17 +656,6 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
     }
 #endif
 
-    // Refresh context register
-    /*INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
-            IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg,
-            IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);*/
-    /*INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
-            IARG_ADDRINT, &contexts[17], IARG_RETURN_REGS, switchReg,
-            IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);
-    */
-
-    //std::set<REG> allGPRs = {REG_RIP, REG_RFLAGS, REG_RSP, REG_RBP, REG_RAX, REG_RBX, REG_RCX, REG_RDX, REG_RSI, REG_RDI, REG_R8, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15, REG_SEG_FS, REG_SEG_GS, REG_SEG_FS_BASE};
-
     // Insert reads and writes around instruction sequences
     // Reads: Last thing before first instr in sequence
     // Writes: First thing after last instr in sequence, and after taken branches
@@ -685,10 +665,11 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
 
         std::set<REG> inRegs, outRegs;
         FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
-        inRegs.insert(REG_SEG_FS_BASE);
-        inRegs.insert(REG_SEG_FS);
         
-        //inRegs = allGPRs; outRegs = allGPRs;  // FIXME: Seems useless, still fails
+        // TODO: Remove if we're sure we don't need these anymore
+        //inRegs.insert(REG_SEG_FS_BASE);
+        //inRegs.insert(REG_SEG_FS);
+
         InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_LAST, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
@@ -711,14 +692,13 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         }
     }
 
-#if 1
- //FIXME!!   
-            // Immediately go back to version 0
-            for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
-                BBL_SetTargetVersion(bbl, TRACE_VERSION_DEFAULT);
-            }
-#endif
-
+    // Immediately go back to version 0
+    // FIXME: This is currently duplicated below. It is necessary to apply this
+    // to all BBLs at this point. Revisit once we revamp the 2-versioned trace
+    // thing.
+    for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
+        BBL_SetTargetVersion(bbl, TRACE_VERSION_DEFAULT);
+    }
 
     // Insert switchpoint handlers
     auto insertSwitchHandler = [&](uint32_t idx, IPOINT ipoint) {
@@ -767,7 +747,6 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
         } else {
             assert(TRACE_Version(trace) == TRACE_VERSION_NOJUMP);
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)XXSwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
             
             // Immediately go back to version 0
             for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
@@ -795,10 +774,6 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             break;
         }
     }
-    
-    /*for (uint32_t idx = 0; idx < traceInstrs; idx++) {
-        INS_InsertCall(idxToIns[idx], IPOINT_BEFORE, (AFUNPTR)PrintIns, IARG_ADDRINT, INS_Address(idxToIns[idx]), IARG_END);
-    }*/
 }
 
 }  // namespace spin
