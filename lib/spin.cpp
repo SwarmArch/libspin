@@ -376,8 +376,6 @@ void InstrumentTrace(TRACE trace, VOID *v) {
     }
 
     TraceInfo pt;
-    pt.firstIns = firstIns;
-    pt.skipLeadingSwitchCall = INS_IsSyscall(pt.firstIns) || TRACE_Version(trace) /*non-0 versions in spin-fast cannot have leading switchcalls*/;
     traceCallback(trace, pt);
     Instrument(trace, pt);
 }

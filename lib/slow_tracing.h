@@ -97,7 +97,7 @@ void SwitchHandler(THREADID tid, ThreadContext* tc, uint64_t nextTid, const CONT
 void Instrument(TRACE trace, const TraceInfo& pt) {
     INS firstIns = BBL_InsHead(TRACE_BblHead(trace));
 
-    // Add switch handlers
+    // Add switchcalls and switch handlers
     // NOTE: For now, this is just a post-handler, but if we find we need to
     // modify the context in the switchcall (e.g., write arguments etc), we can
     // save the context first, pass our internal copy to the switchcall, then
@@ -105,14 +105,17 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
     for (auto iip : pt.switchpoints) {
         INS ins = std::get<0>(iip);
         IPOINT ipoint = std::get<1>(iip);
+        std::function<void()> ifun = std::get<2>(iip);
         if (ipoint != IPOINT_BEFORE) {
             // We can probably do AFTER and TAKEN_BRANCH in slow mode, but
             // they're difficult to do in fast mode.
             panic("Switchcalls only support IPOINT_BEFORE for now");
         }
 
-        if (ins == firstIns && INS_IsSyscall(ins)) continue;
-        // Will be added right after the switchcall
+        if (ins == firstIns && ipoint == IPOINT_BEFORE && INS_IsSyscall(ins)) continue;
+        // First the switchcall...
+        ifun();
+        // ...then the switch handler
         INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)NeedsSwitch,
                 IARG_REG_VALUE, switchReg, IARG_END);
         INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SwitchHandler,
@@ -120,6 +123,18 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
                 IARG_REG_VALUE, tcReg,
                 IARG_REG_VALUE, switchReg,
                 IARG_CONST_CONTEXT, IARG_END);
+    }
+
+
+    // Add normal calls
+    for (auto iip : pt.callpoints) {
+        INS ins = std::get<0>(iip);
+        IPOINT ipoint = std::get<1>(iip);
+        std::function<void()> ifun = std::get<2>(iip);
+
+        if (ins == firstIns && ipoint == IPOINT_BEFORE && INS_IsSyscall(ins)) continue;
+
+        ifun();
     }
 }
 

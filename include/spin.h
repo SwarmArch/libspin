@@ -21,6 +21,7 @@
 
 /* Public libspin interface */
 
+#include <functional>
 #include <stdint.h>
 #include <tuple>
 #include <vector>
@@ -45,7 +46,7 @@ namespace spin {
     typedef ThreadId (*UncaptureCallback)(ThreadId tid, ThreadContext* tc);
     typedef void (*ThreadCallback)(ThreadId tid);
 
-    typedef std::vector< std::tuple<INS, IPOINT> > CallpointVector;
+    typedef std::vector< std::tuple<INS, IPOINT, std::function<void()> > > CallpointVector;
 
     // Internal methods --- used by IARG macros
 #ifndef SPIN_SLOW
@@ -59,21 +60,25 @@ namespace spin {
         private:
             CallpointVector callpoints;
             CallpointVector switchpoints;
-            INS firstIns;
-            bool skipLeadingSwitchCall;
 
         public:
             template <typename ...Args>
             void insertCall(INS ins, IPOINT ipoint, AFUNPTR func, Args... args) {
-                callpoints.push_back(std::make_tuple(ins, ipoint));
-                INS_InsertCall(ins, ipoint, func, args..., IARG_CALL_ORDER, CALL_ORDER_DEFAULT+1 /* always run after switchcalls and their internal handlers */, IARG_END);
+                auto insLambda = [=] (Args... args) {
+                    // TODO: I think call order should not be an issue anymore
+                    INS_InsertCall(ins, ipoint, func, args..., IARG_END);
+                };
+                std::function<void()> f = std::bind(insLambda, args...);
+                callpoints.push_back(std::make_tuple(ins, ipoint, f));
             }
 
             template <typename ...Args>
             void insertSwitchCall(INS ins, IPOINT ipoint, AFUNPTR func, Args... args) {
-                if (ins == firstIns && ipoint == IPOINT_BEFORE && skipLeadingSwitchCall) return;
-                switchpoints.push_back(std::make_tuple(ins, ipoint));
-                INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, __getSwitchReg() /*jump target*/, /*IARG_CALL_ORDER, CALL_ORDER_DEFAULT-1,*/ IARG_END);
+                auto insLambda = [=] (Args... args) {
+                    INS_InsertCall(ins, ipoint, func, args..., IARG_RETURN_REGS, __getSwitchReg() /*jump target*/, IARG_END);
+                };
+                std::function<void()> f = std::bind(insLambda, args...);
+                switchpoints.push_back(std::make_tuple(ins, ipoint, f));
             }
 
             friend void InstrumentTrace(TRACE trace, VOID* v);

@@ -563,12 +563,14 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
     if (INS_IsSyscall(idxToIns[0])) return;
 
     // Find callpoint and switchpoint order
+    
     struct IPoints {
-        bool before;
-        bool after;
-        bool taken_branch;
+        typedef std::vector<std::function<void()> > IPVec;
+        IPVec before;
+        IPVec after;
+        IPVec taken_branch;
 
-        IPoints() : before(false), after(false), taken_branch(false) {}
+        IPoints() {}
     };
 
     IPoints callIPoints[traceInstrs];
@@ -578,12 +580,13 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         for (auto callpoint : cvec) {
             INS ins = std::get<0>(callpoint);
             IPOINT ipoint = std::get<1>(callpoint);
+            auto ifun = std::get<2>(callpoint);
             uint32_t idx = insToIdx[ins];
             assert(idx < traceInstrs);
             switch (ipoint) {
-                case IPOINT_BEFORE: ipoints[idx].before = true; break;
-                case IPOINT_AFTER: ipoints[idx].after = true; break;
-                case IPOINT_TAKEN_BRANCH: ipoints[idx].taken_branch = true; break;
+                case IPOINT_BEFORE: ipoints[idx].before.push_back(ifun); break;
+                case IPOINT_AFTER: ipoints[idx].after.push_back(ifun); break;
+                case IPOINT_TAKEN_BRANCH: ipoints[idx].taken_branch.push_back(ifun); break;
                 default: assert(false);
             }
         }
@@ -602,8 +605,8 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             insSeqs.push_back(std::tie(curStart, curEnd));
             break;
         }
-        bool hasSwitch = switchIPoints[curEnd].after || switchIPoints[curEnd+1].before;
-        bool closeSeq = callIPoints[curEnd].after || callIPoints[curEnd+1].before || hasSwitch ||
+        bool hasSwitch = switchIPoints[curEnd].after.size() || switchIPoints[curEnd+1].before.size();
+        bool closeSeq = callIPoints[curEnd].after.size() || callIPoints[curEnd+1].before.size() || hasSwitch ||
             INS_IsSyscall(idxToIns[curEnd]) || INS_IsSyscall(idxToIns[curEnd+1]) ||
             INS_Stutters(idxToIns[curEnd]) || INS_Stutters(idxToIns[curEnd+1]);
 
@@ -663,7 +666,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         inRegs.insert(REG_SEG_FS_BASE);
         inRegs.insert(REG_SEG_FS);
 
-        InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_LAST, inRegs);
+        InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_DEFAULT, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
 #ifdef DEBUG_COMPARE_REGS
@@ -685,71 +688,71 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         }
     }
 
-    // Insert switchpoint handlers
-    auto insertSwitchHandler = [&](uint32_t idx, IPOINT ipoint) {
-        /* NOTE: Only IPOINT_BEFORE works for now:
-         *
-         * - To get IPOINT_AFTER to run, SwitchHandler needs the fallthrough
-         *   address; but even then the main problem is the indirect jump is
-         *   inserted out of order with IPOINT_AFTER. IndirectJump does not
-         *   carry a call order, and the standard solution from other pintools
-         *   seems to be to insert it before the next instruction, or after the
-         *   next instruction and then delete the instruction :). We could do
-         *   this in fact... if we ever need IPOINT_AFTER.
-         *
-         * - IPOINT_TAKEN_BRANCH does. not. work. You can't inject an indirect
-         *   branch and can't change REG_RIP between traces (wouldn't that be
-         *   nice). If we need it, we can define a new trace version that
-         *   simply starts with an indirect branch, so that we simply delay the
-         *   jump to the next instruction. This would pollute the code cache
-         *   quite a bit, but should work.
-         */
-        if (ipoint != IPOINT_BEFORE) panic("Switchcalls only support IPOINT_BEFORE for now (can be fixed)");
-        // To support switchcalls at arbitrary points, we produce 2 trace
-        // versions: DEFAULT and NOJUMP. NOJUMP traces have no switchcall at
-        // the befinning of the trace, and therefore no indirect jump.
-        // Otherwise, both versions follow the same sequence: SwitchHandler
-        // returns the new tc, and if it's the same, we switch to version
-        // NOJUMP, otherwise, we go through the indirect jump. This achieves
-        // the intended effect of having a the switchcall called ONLY ONCE if
-        // it returns the same tid.
-        
-        // Only DEFAULT can have switchcalls at the beginning (spin.h filters these)
-        if (idx == 0) assert(TRACE_Version(trace) == TRACE_VERSION_DEFAULT);
-
-        // Save new tc to switchReg
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
-
-        // Compare, return 1 on switchReg if they match (ie if we're not switching threads), otherwise leave switchReg untouched
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)CheckArgsMatch, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
-
-        // Switch to version 1 if switchReg == 1 (note this overload of switchReg is OK because no valid tc address will be 1)
-        INS_InsertVersionCase(idxToIns[idx], switchReg, 1, TRACE_VERSION_NOJUMP, IARG_END);
-        // NOTE: This won't work if 1->1 transitions just continue through the trace, but that doesn't seem to be the case.
-
-        // Otherwise, test failed, actually write tcReg and do the jump
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReturnArg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
-        INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetContextTid, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg, IARG_END);
-        INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
-    };
-    
+    /* Insert switchcalls, switch handlers, and normal calls
+     *
+     * NOTE: For switchcalls, only IPOINT_BEFORE works for now:
+     *
+     * - To get IPOINT_AFTER to run, SwitchHandler needs the fallthrough
+     *   address; but even then the main problem is the indirect jump is
+     *   inserted out of order with IPOINT_AFTER. IndirectJump does not carry a
+     *   call order, and the standard solution from other pintools seems to be
+     *   to insert it before the next instruction, or after the next
+     *   instruction and then delete the instruction :). We could do this in
+     *   fact... if we ever need IPOINT_AFTER.
+     *
+     * - IPOINT_TAKEN_BRANCH does. not. work. You can't inject an indirect
+     *   branch and can't change REG_RIP between traces (wouldn't that be
+     *   nice). If we need it, we can define a new trace version that simply
+     *   starts with an indirect branch, so that we simply delay the jump to
+     *   the next instruction. This would pollute the code cache quite a bit,
+     *   but should work.
+     *
+     * To support switchcalls at arbitrary points, we produce 2 trace versions:
+     * DEFAULT and NOJUMP. NOJUMP traces have no switchcall at the befinning of
+     * the trace, and therefore no indirect jump. Otherwise, both versions
+     * follow the same sequence: SwitchHandler returns the new tc, and if it's
+     * the same, we switch to version NOJUMP, otherwise, we go through the
+     * indirect jump. This achieves the intended effect of not calling the
+     * switchcall again after it returns the same tid.
+     */
     for (uint32_t idx = 0; idx < traceInstrs; idx++) {
-        // Evaluation order matters here: If there are swtichpoints in taken
-        // and fallthrough paths, we want to handle both
-        if (switchIPoints[idx].before) {
-            insertSwitchHandler(idx, IPOINT_BEFORE);
+        // 1. Switchcalls
+        if (switchIPoints[idx].after.size()) panic("Switchcalls at IPOINT_AFTER not supported");
+        if (switchIPoints[idx].taken_branch.size()) panic("Switchcalls at IPOINT_TAKEN_BRANCH not supported");
+        if (switchIPoints[idx].before.size() > 1) panic("Multiple switchcalls per IPOINT not supported");
+        
+        // Skip leading switchcall in NOJUMP version
+        bool skipSwitchcall = (idx == 0 && TRACE_Version(trace) != TRACE_VERSION_DEFAULT);
+        
+        if (switchIPoints[idx].before.size() && !skipSwitchcall) {
+            // Insert switchcall
+            switchIPoints[idx].before[0]();
+            IPOINT ipoint = IPOINT_BEFORE;
+            
+            // Save new tc to switchReg
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+
+            // Compare, return 1 on switchReg if they match (ie if we're not switching threads), otherwise leave switchReg untouched
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)CheckArgsMatch, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+
+            // Switch to version 1 if switchReg == 1 (note this overload of switchReg is OK because no valid tc address will be 1)
+            INS_InsertVersionCase(idxToIns[idx], switchReg, 1, TRACE_VERSION_NOJUMP, IARG_END);
+            // NOTE: This won't work if 1->1 transitions just continue through the trace, but that doesn't seem to be the case.
+
+            // Otherwise, test failed, actually write tcReg and do the jump
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReturnArg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetContextTid, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg, IARG_END);
+            INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
+
+            // Stop adding instrumentation to this trace, nothing should run after the jump
             break;
         }
 
-        if (switchIPoints[idx].taken_branch) {
-            insertSwitchHandler(idx, IPOINT_TAKEN_BRANCH);
-        }
-
-        if (switchIPoints[idx].after) {
-            insertSwitchHandler(idx, IPOINT_AFTER);
-            break;
-        }
+        // 2. Insert normal calls
+        for (auto& f : callIPoints[idx].before) f();
+        for (auto& f : callIPoints[idx].after) f();
+        for (auto& f : callIPoints[idx].taken_branch) f();
     }
 
     // NOJUMP traces must go back to version 0 by default to avoid missing
