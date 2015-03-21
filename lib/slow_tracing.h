@@ -54,6 +54,11 @@ void CoalesceContext(const CONTEXT* ctxt, ThreadContext* tc) {
     InitContext(ctxt, tc);
 }
 
+void UpdatePinContext(ThreadContext* tc) {
+    // In slow mode, the tc IS the pin context, so nothing to do
+    // Fast mode copies all regs to the pin context
+}
+
 /* Public context functions */
 uint64_t getReg(const ThreadContext* tc, REG reg) {
     return PIN_GetContextReg((const CONTEXT*)tc, reg);

@@ -158,6 +158,16 @@ void UncaptureAndSwitch() {
     threadStates[curTid] = RUNNING;
 }
 
+// Execute specified tid, does not return
+void Execute(ThreadId tid, bool isSyscall) {
+    ThreadContext* tc = GetTC(tid);
+    UpdatePinContext(tc);
+    CONTEXT* pinCtxt = GetPinCtxt(tc);
+    PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)(isSyscall? nullptr : tc));
+    PIN_SetContextReg(pinCtxt, tidReg, isSyscall? -1 : tid);
+    PIN_ExecuteAt(pinCtxt);
+}
+
 uint64_t RunTraceGuard(uint64_t executor) {
     return !executor;
 }
@@ -172,7 +182,6 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
 
     ThreadContext* tc = GetTC(tid);
     InitContext(ctxt, tc);
-    CONTEXT* pinCtxt = GetPinCtxt(tc);  // guaranteed fresh :)
     
     if (threadStates[tid] == RUNNING) {
         // We did not yield executor role when we ran the syscall, so keep
@@ -183,14 +192,15 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         executorInSyscall = false;
         DEBUG("[%d] TG: Single thread, becoming executor", tid);
         executorMutex.unlock();
-        PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
-        PIN_SetContextReg(pinCtxt, tidReg, curTid);
-        PIN_ExecuteAt(pinCtxt);
+        Execute(tid, false);
     }
 
     assert(threadStates[tid] == UNCAPTURED);
     bool runsNext = (capturedThreads == 0);
     captureCallback(tid, runsNext);
+
+    // captureCallback yields our context to others. After this point, tc might have changed.
+
     capturedThreads++;
     threadStates[tid] = IDLE;
 
@@ -222,9 +232,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
             // Take syscall
             DEBUG("[%d] TG: Wakeup, taking own syscall", tid);
             executorMutex.unlock();
-            PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
-            PIN_SetContextReg(pinCtxt, tidReg, -1);
-            PIN_ExecuteAt(pinCtxt);
+            Execute(tid, true);
         } else if (executorTid == -1u) {
             // NOTE: Due to wakeups interleaving with uncaptures, we can have
             // multiple threads going for the executor. For example, this
@@ -245,13 +253,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     assert(curTid < MAX_THREADS);
     DEBUG("[%d] TG: Becoming executor, (curTid = %d, capturedThreads = %d)", tid, curTid, capturedThreads);
     executorMutex.unlock();
-
-    tc = GetTC(curTid);
-    pinCtxt = GetPinCtxt(tc);
-    PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
-    PIN_SetContextReg(pinCtxt, tidReg, curTid);
-    PIN_SetContextReg(pinCtxt, REG_RIP, spin::getReg(tc, REG_RIP));
-    PIN_ExecuteAt(pinCtxt);
+    Execute(curTid, false);
 }
 
 uint64_t RunSyscallGuard(uint64_t executor) {
@@ -279,13 +281,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         waitLocks[wakeTid].unlock();  // wake syscall taker
         DEBUG("[%d] SG: Shipping syscall to real tid %d, running %d", tid, wakeTid, curTid);
         executorMutex.unlock();
-
-        ThreadContext* tc = GetTC(curTid);
-        CONTEXT* pinCtxt = GetPinCtxt(tc);
-        PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
-        PIN_SetContextReg(pinCtxt, tidReg, curTid);
-        PIN_SetContextReg(pinCtxt, REG_RIP, spin::getReg(tc, REG_RIP));
-        PIN_ExecuteAt(pinCtxt);
+        Execute(curTid, false);
     } else {
         // We ourselves need to take the syscall...
         if (capturedThreads >= 2) {
@@ -308,12 +304,8 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         
         executorMutex.unlock();
 
-        // Take our syscall (note we just coalesced this context)
-        ThreadContext* tc = GetTC(tid);
-        CONTEXT* pinCtxt = GetPinCtxt(tc);
-        PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
-        PIN_SetContextReg(pinCtxt, tidReg, -1);
-        PIN_ExecuteAt(pinCtxt);
+        // Take our syscall
+        Execute(tid, true);
     }
 }
 
