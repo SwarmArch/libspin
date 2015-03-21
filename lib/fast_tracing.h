@@ -206,9 +206,6 @@ CONTEXT* GetPinCtxt(ThreadContext* tc) {
 
 // FIXME: Interface is kludgy; single-caller, cleaner to specialize spin.cpp
 void CoalesceContext(const CONTEXT* ctxt, ThreadContext* tc) {
-    // FIXME....
-    //PIN_SaveContext(ctxt, &tc->pinCtxt);
-    
     // RIP is the only valid ctxt reg that is out of date in tc
     setReg(tc, REG_RIP, PIN_GetContextReg(ctxt, REG_RIP));
     UpdatePinContext(tc);
@@ -469,9 +466,17 @@ ThreadContext* SwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, AD
         RecordSwitch(tid, tc, nextThreadId);
     }
     WriteReg<REG_RIP>(tc, nextPC);
+    UpdatePinContext(tc);
     assert(nextThreadId < MAX_THREADS);
     DEBUG("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextThreadId);
+    
     return &contexts[nextThreadId];
+
+    // MAKES everything work... GRRRR
+    /*PIN_SetContextReg(&contexts[nextThreadId].pinCtxt, tcReg, (ADDRINT)&contexts[nextThreadId]);
+    PIN_SetContextReg(&contexts[nextThreadId].pinCtxt, tidReg, nextThreadId);
+    PIN_ExecuteAt(&contexts[nextThreadId].pinCtxt);
+    return nullptr;*/
 }
 
 ADDRINT XXSwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
@@ -618,7 +623,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         curEnd++;
     }
 
-#if 0
+#if 1
     info("trace ver %d", TRACE_Version(trace));
     for (auto seq : insSeqs) {
         uint32_t firstIdx = std::get<0>(seq);
@@ -637,19 +642,27 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             else if (std::get<0>(seq) == idx) seqStr = "/";
             else if (std::get<1>(seq) == idx) seqStr = "\\";
         }
-        info("  %3d: 0x%lx %s %s", idx, INS_Address(ins), seqStr, INS_Disassemble(ins).c_str());
+
+        char evStr[5];
+        evStr[4] = '\0';
+        evStr[3] = INS_HasFallThrough(ins)? 'f' : ' ';
+        evStr[2] = (INS_IsBranchOrCall(idxToIns[idx]) || INS_IsRet(idxToIns[idx]))? 'b' : ' ';
+        evStr[1] = INS_IsSyscall(idxToIns[idx])? 's' : ' ';
+        evStr[0] = ' ';
+        info("  %3d: 0x%lx %s %s %s", idx, INS_Address(ins), evStr, seqStr, INS_Disassemble(ins).c_str());
     }
 #endif
 
     // Refresh context register
-    INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
+    /*INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
             IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg,
-            IARG_CALL_ORDER, CALL_ORDER_FIRST, IARG_END);
+            IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);*/
     /*INS_InsertCall(idxToIns[0], IPOINT_BEFORE, (AFUNPTR)GetContextTid,
             IARG_ADDRINT, &contexts[17], IARG_RETURN_REGS, switchReg,
             IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);
     */
 
+    std::set<REG> allGPRs = {REG_RIP, REG_RFLAGS, REG_RSP, REG_RBP, REG_RAX, REG_RBX, REG_RCX, REG_RDX, REG_RSI, REG_RDI, REG_R8, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15, REG_SEG_FS, REG_SEG_GS, REG_SEG_FS_BASE};
 
     // Insert reads and writes around instruction sequences
     // Reads: Last thing before first instr in sequence
@@ -660,6 +673,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
 
         std::set<REG> inRegs, outRegs;
         FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
+        inRegs = allGPRs; outRegs = allGPRs;  // FIXME: Seems useless, still fails
         InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_LAST, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
@@ -682,12 +696,13 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         }
     }
 
+#if 1
  //FIXME!!   
             // Immediately go back to version 0
             for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
                 BBL_SetTargetVersion(bbl, TRACE_VERSION_DEFAULT);
             }
-
+#endif
 
 
     // Insert switchpoint handlers
@@ -718,6 +733,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             DEBUG("instrumenting AT PC %lx", INS_Address(idxToIns[idx]));
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetPC, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetContextTid, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg, IARG_END);
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
         } else if (TRACE_Version(trace) == TRACE_VERSION_DEFAULT) {
             // Save new tc to switchReg
@@ -732,6 +748,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             // Otherwise, test failed, actually write tcReg and do the jump
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReturnArg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)/*GetPC*/ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetContextTid, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg, IARG_END);
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
         } else {
             assert(TRACE_Version(trace) == TRACE_VERSION_NOJUMP);

@@ -33,9 +33,9 @@ env['CPPFLAGS'] = ['-std=c++11', '-Wall', '-Werror', '-Wno-unknown-pragmas',
 env['CPPPATH'] = [os.path.abspath('include/')]
 
 modeFlags = {
-    'opt' : ['-O3','-gdwarf-3'],
+    'opt' : ['-O3','-g'],
     'release' : ['-O3', '-DNDEBUG', '-DNASSERT', '-gdwarf-3', '-march=native'],
-    'debug' : ['-gdwarf-3'],
+    'debug' : ['-O0', '-g'],
 }
 env.Append(CPPFLAGS = modeFlags[mode])
 

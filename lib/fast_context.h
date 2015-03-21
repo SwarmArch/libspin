@@ -33,22 +33,15 @@
 #include <assert.h>
 #include <set>
 
+// When defined, reads and writes check that tc is valid, BUT THEY CANNOT BE
+// INLINED. Thus, these carry a ~5x perf penalty!!
+#define CHECK_TC(tc) assert(tc)
+
 namespace spin {
 
 /* Performance- and locality-optimized context state */
 
 struct ThreadContext {
-    enum State  {
-        UNCAPTURED, // Out in a syscall or other point out of our control. Will trip a capture point when it comes back to Pin; will trip before any other instrumentation function.
-        IDLE,       // Runnable but not active
-        RUNNING,    // Currently running
-        // Transitions: start -> UNCAPTURED
-        //              On capture points: UNCAPTURED -> {IDLE, RUNNING}
-        //              On switchpoints: IDLE <-> RUNNING
-        //              On uncapture points: RUNNING -> UNCAPTURED
-    };
-    
-    State state;
     uint64_t rip;
     uint64_t rflags;
     uint64_t gpRegs[REG_GR_LAST - REG_GR_BASE + 1];
@@ -67,13 +60,12 @@ struct ThreadContext {
     // All other regs use a normal context (huge, and accessor methods are
     // slow, but should be accessed sparingly)
     CONTEXT pinCtxt;
-
-    ThreadContext() : state(UNCAPTURED) {}
 };
 
 /* Init interface */
 
 inline void InitContext(const CONTEXT* ctxt, ThreadContext* tc) {
+    CHECK_TC(tc);
     PIN_SaveContext(ctxt, &tc->pinCtxt);
 
     tc->rip = PIN_GetContextReg(ctxt, REG_RIP);
@@ -95,6 +87,7 @@ inline void InitContext(const CONTEXT* ctxt, ThreadContext* tc) {
 }
 
 inline void UpdatePinContext(ThreadContext* tc) {
+    CHECK_TC(tc);
     PIN_SetContextReg(&tc->pinCtxt, REG_RIP, tc->rip);
     PIN_SetContextReg(&tc->pinCtxt, REG_RFLAGS, tc->rflags);
 
@@ -119,14 +112,17 @@ inline void UpdatePinContext(ThreadContext* tc) {
 template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc);
 
 template <> inline ADDRINT ReadReg<REG_RFLAGS>(const ThreadContext* tc) {
+    CHECK_TC(tc);
     return tc->rflags;
 }
 
 template <> inline ADDRINT ReadReg<REG_RIP>(const ThreadContext* tc) {
+    CHECK_TC(tc);
     return tc->rip;
 }
 
 template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc) {
+    CHECK_TC(tc);
     constexpr uint32_t i = (uint32_t)r;
     if (i >= REG_GR_BASE && i <= REG_GR_LAST) {
         return tc->gpRegs[i - REG_GR_BASE];
@@ -139,6 +135,7 @@ template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc) {
 }
 
 template <REG r> void ReadFPReg(const ThreadContext* tc, PIN_REGISTER* reg) {
+    CHECK_TC(tc);
     constexpr uint32_t i = (uint32_t)r;
     static_assert(i >= REG_YMM_BASE && i <= REG_YMM_LAST, "Only valid for YMM regs");
     for (uint32_t w = 0; w < 4; w++) reg->qword[w] = tc->fpRegs[i - REG_YMM_BASE][w];
@@ -146,6 +143,7 @@ template <REG r> void ReadFPReg(const ThreadContext* tc, PIN_REGISTER* reg) {
 
 // Slow, Pin does not inline, invalid for the regs above
 inline void ReadGenericReg(const ThreadContext* tc, REG r, PIN_REGISTER* val) {
+    CHECK_TC(tc);
     PIN_GetContextRegval(&tc->pinCtxt, r, (uint8_t*)val);
 }
 
@@ -154,14 +152,17 @@ inline void ReadGenericReg(const ThreadContext* tc, REG r, PIN_REGISTER* val) {
 template <REG r> inline void WriteReg(ThreadContext* tc, ADDRINT regVal);
 
 template <> inline void WriteReg<REG_RFLAGS>(ThreadContext* tc, ADDRINT regVal) {
+    CHECK_TC(tc);
     tc->rflags = regVal;
 }
 
 template <> inline void WriteReg<REG_RIP>(ThreadContext* tc, ADDRINT regVal) {
+    CHECK_TC(tc);
     tc->rip = regVal;
 }
 
 template <REG r> inline void WriteReg(ThreadContext* tc, ADDRINT regVal) {
+    CHECK_TC(tc);
     constexpr uint32_t i = (uint32_t)r;
     // NOTE: Userland does not write segment registers... but keeping for symmetry
     if (i >= REG_GR_BASE && i <= REG_GR_LAST) {
@@ -174,6 +175,7 @@ template <REG r> inline void WriteReg(ThreadContext* tc, ADDRINT regVal) {
 }
 
 template <REG r> void WriteFPReg(ThreadContext* tc, const PIN_REGISTER* reg) {
+    CHECK_TC(tc);
     constexpr uint32_t i = (uint32_t)r;
     static_assert(i >= REG_YMM_BASE && i <= REG_YMM_LAST, "Only valid for YMM regs");
     for (uint32_t w = 0; w < 4; w++) tc->fpRegs[i - REG_YMM_BASE][w] = reg->qword[w];
@@ -181,6 +183,7 @@ template <REG r> void WriteFPReg(ThreadContext* tc, const PIN_REGISTER* reg) {
 
 // Slow, Pin does not inline, invalid for the regs above
 inline void WriteGenericReg(ThreadContext* tc, REG r, const PIN_REGISTER* val) {
+    CHECK_TC(tc);
     PIN_SetContextRegval(&tc->pinCtxt, r, (uint8_t*)val);
 }
 

@@ -21,9 +21,14 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "mutex.h"
+
+extern mutex logMutex;
 
 static inline void info(const char* str) {
-    printf("[spin] %s\n", str);
+    scoped_mutex sm(logMutex);
+    fprintf(stdout, "[spin] %s\n", str);
+    fflush(stdout);
 }
 
 template <typename ...Args>
@@ -34,8 +39,10 @@ static void info(const char* fmt, Args... args) {
 }
 
 static inline void panic(const char* str) {
+    logMutex.lock();
     fprintf(stderr, "[spin] Panic: %s\n", str);
     fflush(stderr);
+    logMutex.unlock();
     exit(1);
 }
 

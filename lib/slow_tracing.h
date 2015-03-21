@@ -83,6 +83,9 @@ void SwitchHandler(THREADID tid, ThreadContext* tc, uint64_t nextTid, const CONT
     CONTEXT* nextPinCtxt = GetPinCtxt(nextTc);
     PIN_SetContextReg(nextPinCtxt, tcReg, (ADDRINT)nextTc);
     PIN_SetContextReg(nextPinCtxt, tidReg, nextTid);
+
+    info("Switching %lx -> %lx (%ld)", spin::getReg(tc, REG_RIP), spin::getReg(nextTc, REG_RIP), nextTid);
+
     PIN_ExecuteAt(nextPinCtxt);
 }
 

@@ -23,6 +23,7 @@
 #include "spin.h"
 
 #include "mutex.h"
+#include "log.h"  // this is a COLOSSAL hack
 
 uint64_t syscallCount = 0;
 uint64_t insCount = 0;
@@ -51,7 +52,7 @@ uint32_t uncapture(spin::ThreadId tid, spin::ThreadContext* tc) {
     scoped_mutex sm(queueMutex);
     assert(!threadQueue.empty());  // spin should not call this with a single thread
     uint32_t next = threadQueue.front();
-    printf("Uncapture of tid %d (pc %lx), moving to %d q{%ld elems}[%d...%d]\n",
+    info("Uncapture of tid %d (pc %lx), moving to %d q{%ld elems}[%d...%d]",
             tid, spin::getReg(tc, REG_RIP), next, threadQueue.size(),
             threadQueue.front(), threadQueue.back());
     threadQueue.pop_front();
@@ -60,24 +61,24 @@ uint32_t uncapture(spin::ThreadId tid, spin::ThreadContext* tc) {
 }
 
 void capture(spin::ThreadId tid, bool runsNext) {
-    printf("Capturing tid %d\n", tid);
+    info("Capturing tid %d\n", tid);
     if (!runsNext) {
         scoped_mutex sm(queueMutex);
         threadQueue.push_back(tid);
-        printf("Queued %d, q{%ld elems}[%d...%d]\n", tid, threadQueue.size(), threadQueue.front(), threadQueue.back());
+        info("Queued %d, q{%ld elems}[%d...%d]", tid, threadQueue.size(), threadQueue.front(), threadQueue.back());
     }
 }
 
 void threadStart(spin::ThreadId tid) {
     threadStartCount++;
-    printf("interleaver: threadStart %d\n", tid);
+    info("interleaver: threadStart %d", tid);
 }
 
 void threadEnd(spin::ThreadId tid) {
     threadEndCount++;
-    printf("interleaver: threadEnd %d\n", tid);
+    info("interleaver: threadEnd %d", tid);
     if (threadStartCount == threadEndCount) {
-        printf("interleaver: done\n");
+        info("interleaver: done");
     }
 }
 
@@ -90,9 +91,9 @@ void countLoad() {
 bool shouldSwitch;
 
 uint64_t countInstrsAndSwitch(spin::ThreadId curTid, const spin::ThreadContext* tc, ADDRINT curPc, uint32_t instrs, uint32_t ver, bool isTraceHead) {
-    //printf("switchcall, %d pc 0x%lx ver %d isTraceHead %d\n", curTid, curPc, ver, isTraceHead);
+    info("switchcall, %d pc 0x%lx ver %d isTraceHead %d", curTid, curPc, ver, isTraceHead);
     uint32_t nextTid = curTid;
-    if (shouldSwitch) {
+    if (shouldSwitch && curPc == 0x401cfc) {
         scoped_mutex sm(queueMutex);
         threadQueue.push_back(curTid);
         nextTid = threadQueue.front();
@@ -114,16 +115,16 @@ uint64_t countInstrsAndSwitch(spin::ThreadId curTid, const spin::ThreadContext* 
 
 void trace(TRACE trace, spin::TraceInfo& pt) {
     for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
-        for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
+/*        for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
             if (INS_IsMemoryRead(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
             if (INS_HasMemoryRead2(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
         }
-
+*/
 #if 1
-        //INS tgtIns = BBL_InsTail(bbl); 
-        INS tgtIns = BBL_InsHead(bbl);
+        INS tgtIns = BBL_InsTail(bbl); 
+        //INS tgtIns = BBL_InsHead(bbl);
         //if (true || /*INS_HasFallThrough(tailIns) &&*/ BBL_InsHead(bbl) != tailIns /*&& !INS_Stutters(tailIns)*/) {
-        //if (!INS_Stutters(tailIns)) {
+        if (!INS_Stutters(tgtIns) && !INS_IsSyscall(tgtIns) && BBL_InsHead(bbl) != tgtIns) {
          pt.insertSwitchCall(tgtIns, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
                     IARG_SPIN_THREAD_ID,
                     IARG_SPIN_CONST_CONTEXT,
@@ -131,7 +132,7 @@ void trace(TRACE trace, spin::TraceInfo& pt) {
                     IARG_UINT32, BBL_NumIns(bbl),
                     IARG_UINT32, TRACE_Version(trace),
                     IARG_UINT32, tgtIns == BBL_InsHead(TRACE_BblHead(trace)));
-        //}
+        }
 #endif
         /*
         if (INS_IsBranchOrCall(tailIns) || INS_IsRet(tailIns)) {
@@ -160,7 +161,7 @@ void nullCallback(spin::ThreadId tid) {
 
 int main(int argc, char *argv[]) {
     PIN_InitSymbols();
-    if (PIN_Init(argc, argv)) printf("Wrong args\n");
+    if (PIN_Init(argc, argv)) info("Wrong args");
     spin::init(trace, threadStart, threadEnd, capture, uncapture);
     PIN_AddFiniFunction(fini, 0);
     PIN_StartProgram();
