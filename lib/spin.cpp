@@ -101,15 +101,15 @@ void PrintContext(uint32_t tid, const char* desc, CONTEXT* ctxt) {
         return (void*)PIN_GetContextReg(ctxt, reg);
     };
     info("[%d] %s context:", tid, desc);
-    info(" rip: %16p   rflags: %16p", r(REG_RIP), r(REG_RFLAGS));
-    info(" rsp: %16p      rbp: %16p", r(REG_RSP), r(REG_RBP));
-    info(" rax: %16p      rbx: %16p", r(REG_RAX), r(REG_RBX));
-    info(" rcx: %16p      rdx: %16p", r(REG_RCX), r(REG_RDX));
-    info(" rsi: %16p      rdi: %16p", r(REG_RSI), r(REG_RDI));
-    info("  r8: %16p       r9: %16p", r(REG_R8), r(REG_R9));
-    info(" r10: %16p      r11: %16p", r(REG_R10), r(REG_R11));
-    info(" r12: %16p      r13: %16p", r(REG_R12), r(REG_R13));
-    info(" r14: %16p      r15: %16p", r(REG_R14), r(REG_R15));
+    info(" rip: %18p   rflags: %18p", r(REG_RIP), r(REG_RFLAGS));
+    info(" rsp: %18p      rbp: %18p", r(REG_RSP), r(REG_RBP));
+    info(" rax: %18p      rbx: %18p", r(REG_RAX), r(REG_RBX));
+    info(" rcx: %18p      rdx: %18p", r(REG_RCX), r(REG_RDX));
+    info(" rsi: %18p      rdi: %18p", r(REG_RSI), r(REG_RDI));
+    info("  r8: %18p       r9: %18p", r(REG_R8), r(REG_R9));
+    info(" r10: %18p      r11: %18p", r(REG_R10), r(REG_R11));
+    info(" r12: %18p      r13: %18p", r(REG_R12), r(REG_R13));
+    info(" r14: %18p      r15: %18p", r(REG_R14), r(REG_R15));
 }
 
 /* Capture, uncapture, and executor handling */
@@ -185,8 +185,6 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         executorMutex.unlock();
         PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
         PIN_SetContextReg(pinCtxt, tidReg, curTid);
-        PIN_SetContextReg(pinCtxt, REG_RIP, spin::getReg(tc, REG_RIP));
-        CoalesceContext(pinCtxt, tc);
         PIN_ExecuteAt(pinCtxt);
     }
 
@@ -224,12 +222,8 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
             // Take syscall
             DEBUG("[%d] TG: Wakeup, taking own syscall", tid);
             executorMutex.unlock();
-            CoalesceContext(pinCtxt, tc);  // FIXME only for fast, added to test context sanity
             PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
             PIN_SetContextReg(pinCtxt, tidReg, -1);
-            PIN_SetContextReg(pinCtxt, REG_RIP, spin::getReg(tc, REG_RIP));
-            PrintContext(tid, "Pre-syscall (TG)", pinCtxt);
-            CoalesceContext(pinCtxt, tc);
             PIN_ExecuteAt(pinCtxt);
         } else if (executorTid == -1u) {
             // NOTE: Due to wakeups interleaving with uncaptures, we can have
@@ -257,7 +251,6 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
     PIN_SetContextReg(pinCtxt, tidReg, curTid);
     PIN_SetContextReg(pinCtxt, REG_RIP, spin::getReg(tc, REG_RIP));
-    CoalesceContext(pinCtxt, tc);
     PIN_ExecuteAt(pinCtxt);
 }
 
@@ -292,7 +285,6 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
         PIN_SetContextReg(pinCtxt, tidReg, curTid);
         PIN_SetContextReg(pinCtxt, REG_RIP, spin::getReg(tc, REG_RIP));
-        CoalesceContext(pinCtxt, tc);
         PIN_ExecuteAt(pinCtxt);
     } else {
         // We ourselves need to take the syscall...
@@ -316,16 +308,11 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         
         executorMutex.unlock();
 
-        // Take our syscall
+        // Take our syscall (note we just coalesced this context)
         ThreadContext* tc = GetTC(tid);
         CONTEXT* pinCtxt = GetPinCtxt(tc);
         PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
         PIN_SetContextReg(pinCtxt, tidReg, -1);
-        PIN_SetContextReg(pinCtxt, REG_RIP, spin::getReg(tc, REG_RIP));
-        PrintContext(tid, "Pre-syscall (SG)", pinCtxt);
-        CoalesceContext(pinCtxt, tc);
-        PrintContext(tid, "Pre-syscall (SG) [post-coalesced]", pinCtxt);
-        info("States: %d %d", threadStates[0], threadStates[1]);
         PIN_ExecuteAt(pinCtxt);
     }
 }

@@ -83,7 +83,7 @@ uint32_t uncapture(spin::ThreadId tid, spin::ThreadContext* tc) {
 }
 
 void capture(spin::ThreadId tid, bool runsNext) {
-    info("Capturing tid %d\n", tid);
+    info("Capturing tid %d", tid);
     if (!runsNext) {
         scoped_mutex sm(queueMutex);
         threadQueue.push_back(tid);
