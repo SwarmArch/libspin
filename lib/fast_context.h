@@ -35,7 +35,7 @@
 
 // When defined, reads and writes check that tc is valid, BUT THEY CANNOT BE
 // INLINED. Thus, these carry a ~5x perf penalty!!
-#define CHECK_TC(tc) assert(tc)
+#define CHECK_TC(tc) //assert(tc)
 
 namespace spin {
 
@@ -45,7 +45,10 @@ struct ThreadContext {
     uint64_t rip;
     uint64_t rflags;
     uint64_t gpRegs[REG_GR_LAST - REG_GR_BASE + 1];
-    uint64_t segRegs[REG_SEG_LAST - REG_SEG_BASE + 1];
+    
+    // Segments. In 64 bits, only fs and gs are used (read-only), but fsBase
+    // and gsBase are also needed
+    uint64_t fs, fsBase, gs, gsBase;
    
     // NOTE: For SSE/SSE2/.../AVX, we ALWAYS save and restore 256 ymm (AVX)
     // registers, as EMM/XMM regs are aliased to YMM. This will not work if
@@ -75,9 +78,10 @@ inline void InitContext(const CONTEXT* ctxt, ThreadContext* tc) {
         tc->gpRegs[i - REG_GR_BASE] = PIN_GetContextReg(ctxt, (REG)i);
     }
 
-    for (uint32_t i = REG_SEG_BASE; i <= REG_SEG_LAST; i++) {
-        tc->segRegs[i - REG_SEG_BASE] = PIN_GetContextReg(ctxt, (REG)i);
-    }
+    tc->fs = PIN_GetContextReg(ctxt, REG_SEG_FS);
+    tc->fsBase = PIN_GetContextReg(ctxt, REG_SEG_FS_BASE);
+    tc->gs = PIN_GetContextReg(ctxt, REG_SEG_GS);
+    tc->gsBase = PIN_GetContextReg(ctxt, REG_SEG_GS_BASE);
 
     for (uint32_t i = REG_YMM_BASE; i <= REG_YMM_LAST; i++) {
         REG r = (REG)i;
@@ -95,9 +99,7 @@ inline void UpdatePinContext(ThreadContext* tc) {
         PIN_SetContextReg(&tc->pinCtxt, (REG)i, tc->gpRegs[i - REG_GR_BASE]);
     }
 
-    for (uint32_t i = REG_SEG_BASE; i <= REG_SEG_LAST; i++) {
-        PIN_SetContextReg(&tc->pinCtxt, (REG)i, tc->segRegs[i - REG_SEG_BASE]);
-    }
+    // NOTE: No need to update segment regs, which are read-only
 
     for (uint32_t i = REG_YMM_BASE; i <= REG_YMM_LAST; i++) {
         REG r = (REG)i;
@@ -111,23 +113,22 @@ inline void UpdatePinContext(ThreadContext* tc) {
 
 template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc);
 
-template <> inline ADDRINT ReadReg<REG_RFLAGS>(const ThreadContext* tc) {
-    CHECK_TC(tc);
-    return tc->rflags;
-}
+template <> inline ADDRINT ReadReg<REG_RIP>(const ThreadContext* tc) { CHECK_TC(tc); return tc->rip; }
+template <> inline ADDRINT ReadReg<REG_RFLAGS>(const ThreadContext* tc) { CHECK_TC(tc); return tc->rflags; }
 
-template <> inline ADDRINT ReadReg<REG_RIP>(const ThreadContext* tc) {
-    CHECK_TC(tc);
-    return tc->rip;
-}
+template <> inline ADDRINT ReadReg<REG_SEG_FS>(const ThreadContext* tc) { CHECK_TC(tc); return tc->fs; }
+template <> inline ADDRINT ReadReg<REG_SEG_GS>(const ThreadContext* tc) { CHECK_TC(tc); return tc->gs; }
+
+// Get this: If these are inlined, Pin fails silently. So have a panic to ensure they do NOT inline
+template <> inline ADDRINT ReadReg<REG_SEG_FS_BASE>(const ThreadContext* tc) { if (!tc) panic("WFT PIN"); return tc->fsBase; }
+template <> inline ADDRINT ReadReg<REG_SEG_GS_BASE>(const ThreadContext* tc) { if (!tc) panic("WFT PIN"); return tc->gsBase; }
+
 
 template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc) {
     CHECK_TC(tc);
     constexpr uint32_t i = (uint32_t)r;
     if (i >= REG_GR_BASE && i <= REG_GR_LAST) {
         return tc->gpRegs[i - REG_GR_BASE];
-    } else if (i >= REG_SEG_BASE && i <= REG_SEG_LAST) {
-        return tc->segRegs[i - REG_SEG_BASE];
     } else {
         assert(false);  // should not be called
         return 0ul;
@@ -151,28 +152,20 @@ inline void ReadGenericReg(const ThreadContext* tc, REG r, PIN_REGISTER* val) {
 
 template <REG r> inline void WriteReg(ThreadContext* tc, ADDRINT regVal);
 
-template <> inline void WriteReg<REG_RFLAGS>(ThreadContext* tc, ADDRINT regVal) {
-    CHECK_TC(tc);
-    tc->rflags = regVal;
-}
-
-template <> inline void WriteReg<REG_RIP>(ThreadContext* tc, ADDRINT regVal) {
-    CHECK_TC(tc);
-    tc->rip = regVal;
-}
+template <> inline void WriteReg<REG_RIP>(ThreadContext* tc, ADDRINT regVal) { CHECK_TC(tc); tc->rip = regVal; }
+template <> inline void WriteReg<REG_RFLAGS>(ThreadContext* tc, ADDRINT regVal) { CHECK_TC(tc); tc->rflags = regVal; }
 
 template <REG r> inline void WriteReg(ThreadContext* tc, ADDRINT regVal) {
     CHECK_TC(tc);
     constexpr uint32_t i = (uint32_t)r;
-    // NOTE: Userland does not write segment registers... but keeping for symmetry
     if (i >= REG_GR_BASE && i <= REG_GR_LAST) {
         tc->gpRegs[i - REG_GR_BASE] = regVal;
-    } else if (i >= REG_SEG_BASE && i <= REG_SEG_LAST) {
-        tc->segRegs[i - REG_SEG_BASE] = regVal;
     } else {
         assert(false);  // should not be called (and -O3 will not dead-eliminate this code)
     }
 }
+
+// NOTE: No FS/GS write methods. Userspace does not write them
 
 template <REG r> void WriteFPReg(ThreadContext* tc, const PIN_REGISTER* reg) {
     CHECK_TC(tc);

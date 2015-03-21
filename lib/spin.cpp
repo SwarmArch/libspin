@@ -39,7 +39,7 @@
 
 mutex logMutex; // FIXME: To log.cpp
 
-#define DEBUG(args...) info(args)
+#define DEBUG(args...) //info(args)
 
 // Pin's limit is 2Kthreads (as of 2.12)
 #define MAX_THREADS 2048

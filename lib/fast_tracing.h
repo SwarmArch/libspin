@@ -215,16 +215,23 @@ void CoalesceContext(const CONTEXT* ctxt, ThreadContext* tc) {
 uint64_t getReg(const ThreadContext* tc, REG reg) {
     assert(tc);
     reg = REG_FullRegName(reg);
-    if (reg == REG_RIP) return tc->rip;
-    if (reg == REG_RFLAGS) return tc->rflags;
     uint32_t regIdx = (uint32_t)reg;
     if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) return tc->gpRegs[regIdx - REG_GR_BASE];
-    if (regIdx >= REG_SEG_BASE && regIdx <= REG_SEG_LAST) return tc->gpRegs[regIdx - REG_SEG_BASE];
-    // NOTE: It's possible to support extra regs if you need them, but I don't
-    // want to get into >64-bit regs and I don't think we'll ever need them
-    panic("getReg(): Register %s (%d) not supported for now (edit me!)",
-             REG_StringShort(reg).c_str(), regIdx);
-    return -1l;
+    
+    switch (reg) {
+        case REG_RIP: return tc->rip;
+        case REG_RFLAGS: return tc->rflags;
+        case REG_SEG_FS: return tc->fs;
+        case REG_SEG_FS_BASE: return tc->fsBase;
+        case REG_SEG_GS: return tc->gs;
+        case REG_SEG_GS_BASE: return tc->gsBase;
+        default:
+            // NOTE: It's possible to support extra regs if you need them, but I don't
+            // want to get into >64-bit regs and I don't think we'll ever need them
+            panic("getReg(): Register %s (%d) not supported for now (edit me!)",
+                REG_StringShort(reg).c_str(), regIdx);
+    }
+    return -1l;  // unreachable
 }
 
 void setReg(ThreadContext* tc, REG reg, uint64_t val) {
@@ -237,8 +244,6 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
         tc->rflags = val;
     } else if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) {
         tc->gpRegs[regIdx - REG_GR_BASE] = val;
-    } else if (regIdx >= REG_SEG_BASE && regIdx <= REG_SEG_LAST) {
-        tc->gpRegs[regIdx - REG_SEG_BASE] = val;
     } else {
         panic("setReg(): Register %s (%d) not supported for now (edit me!)",
                 REG_StringShort(reg).c_str(), regIdx);
@@ -288,7 +293,9 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
             CASE_READ_REG(REG_R14);
             CASE_READ_REG(REG_R15);
             CASE_READ_REG(REG_SEG_FS);
+            CASE_READ_REG(REG_SEG_FS_BASE);
             CASE_READ_REG(REG_SEG_GS);
+            CASE_READ_REG(REG_SEG_GS_BASE);
             default:
             nextClass = true;
         }
@@ -348,7 +355,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
         }
 
         // Misc regs
-        info("Generic RegRead %s", REG_StringShort(r).c_str());
+        //info("Generic RegRead %s", REG_StringShort(r).c_str());
         
         fp = (AFUNPTR)ReadGenericReg;
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
@@ -382,8 +389,6 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
             CASE_WRITE_REG(REG_R13);
             CASE_WRITE_REG(REG_R14);
             CASE_WRITE_REG(REG_R15);
-            CASE_WRITE_REG(REG_SEG_FS);
-            CASE_WRITE_REG(REG_SEG_GS);
             default:
             nextClass = true;
         }
@@ -431,6 +436,10 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
             continue;
         }
 
+        if (r == REG_SEG_FS || r == REG_SEG_FS_BASE || r == REG_SEG_GS || r == REG_SEG_GS_BASE) {
+            panic("Only supervisor instrs can write segment reg %s", REG_StringShort(r).c_str());
+        }
+
         // Misc regs
         info("Generic RegWrite %s", REG_StringShort(r).c_str());
 
@@ -453,7 +462,6 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
 
     compRegs(REG_RFLAGS, tc->rflags, "flags");
     for (uint32_t i = 0; i < 16; i++) compRegs((REG)((int)REG_GR_BASE + i), tc->gpRegs[i], "gpr");
-    for (uint32_t i = 0; i < REG_SEG_LAST-REG_SEG_BASE+1; i++) compRegs((REG)((int)REG_SEG_BASE + i), tc->segRegs[i], "seg");
 }
 
 uint64_t GetContextTid(const ThreadContext* tc) {
@@ -509,6 +517,10 @@ void FindInOutRegs(INS ins, std::set<REG>& inRegs, std::set<REG>& outRegs) {
             inRegs.insert(reg);
         }
     }
+
+    // FS/GS-relative accs need the base regs as well, but Pin does not flag them
+    if (inRegs.count(REG_SEG_FS)) inRegs.insert(REG_SEG_FS_BASE);
+    if (inRegs.count(REG_SEG_GS)) inRegs.insert(REG_SEG_GS_BASE);
 
     for (uint32_t i = 0; i < INS_MaxNumWRegs(ins); i++) {
         REG reg = INS_RegW(ins, i);
@@ -662,7 +674,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);
     */
 
-    std::set<REG> allGPRs = {REG_RIP, REG_RFLAGS, REG_RSP, REG_RBP, REG_RAX, REG_RBX, REG_RCX, REG_RDX, REG_RSI, REG_RDI, REG_R8, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15, REG_SEG_FS, REG_SEG_GS, REG_SEG_FS_BASE};
+    //std::set<REG> allGPRs = {REG_RIP, REG_RFLAGS, REG_RSP, REG_RBP, REG_RAX, REG_RBX, REG_RCX, REG_RDX, REG_RSI, REG_RDI, REG_R8, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15, REG_SEG_FS, REG_SEG_GS, REG_SEG_FS_BASE};
 
     // Insert reads and writes around instruction sequences
     // Reads: Last thing before first instr in sequence
@@ -673,7 +685,10 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
 
         std::set<REG> inRegs, outRegs;
         FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
-        inRegs = allGPRs; outRegs = allGPRs;  // FIXME: Seems useless, still fails
+        inRegs.insert(REG_SEG_FS_BASE);
+        inRegs.insert(REG_SEG_FS);
+        
+        //inRegs = allGPRs; outRegs = allGPRs;  // FIXME: Seems useless, still fails
         InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_LAST, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
