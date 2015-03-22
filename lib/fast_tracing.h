@@ -272,12 +272,6 @@ void executeAt(ThreadContext* tc, ADDRINT nextPC) {
 }
 
 
-/* Instrumentation */
-
-void X87Panic(ADDRINT pc) {
-    panic("x87 instruction at PC 0x%lx. We do not handle x87. Recompile with -mno-80387 or use spin_slow.", pc);
-}
-
 /* Context read/write instrumentation */
 
 void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG>& inRegs) {
@@ -363,18 +357,26 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
          * do that before all other reads, so that XMM reads work OK?
          * 
          * This is complete madness, might as well use ExecuteAt at that point.
+         *
+         * UPDATE: Using IARG_PARTIAL_CONTEXT works for ST0-ST7 and MXCSR. X87
+         * still seems like a pseudoregister that can't be used (example tools
+         * use it to get the FP state). For simplicity, we now use
+         * IARG_PARTIAL_CONTEXT for all generics, but this could be expensive.
          */
         if (r == REG_X87) continue;
-        if (r >= REG_ST0 && r <= REG_ST7) {
-            INS_InsertCall(ins, ipoint, (AFUNPTR)X87Panic, IARG_INST_PTR, IARG_END);
-            continue;
-        }
-
+#if 0
         // Misc regs
         info("Generic RegRead %s", REG_StringShort(r).c_str());
-        
+        // Fails for ST0-7, MXCSR
         //fp = (AFUNPTR)ReadGenericReg;
         //INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
+#endif
+        // Seems to work in general
+        fp = (AFUNPTR)ReadGenericRegPartialCtxt;
+        REGSET inSet, outSet;
+        REGSET_Clear(inSet); REGSET_Clear(outSet);
+        REGSET_Insert(outSet, r);
+        INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_PARTIAL_CONTEXT, &inSet, &outSet, IARG_CALL_ORDER, callOrder, IARG_END);
     }
 }
 
@@ -447,20 +449,17 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
 
         // NOTE(dsm): See X87 comment above
         if (r == REG_X87) continue;
-        if (r >= REG_ST0 && r <= REG_ST7) {
-            INS_InsertCall(ins, ipoint, (AFUNPTR)X87Panic, IARG_INST_PTR, IARG_END);
-            continue;
-        }
 
         if (r == REG_SEG_FS || r == REG_SEG_FS_BASE || r == REG_SEG_GS || r == REG_SEG_GS_BASE) {
             panic("Only supervisor instrs can write segment reg %s", REG_StringShort(r).c_str());
         }
 
-        // Misc regs
-        info("Generic RegWrite %s", REG_StringShort(r).c_str());
-
-        //fp = (AFUNPTR)WriteGenericReg;
-        //INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
+        // Misc regs --- use generic and VERY SLOW writes through partial contexts
+        fp = (AFUNPTR)WriteGenericRegPartialCtxt;
+        REGSET inSet, outSet;
+        REGSET_Clear(inSet); REGSET_Clear(outSet);
+        REGSET_Insert(inSet, r);
+        INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_PARTIAL_CONTEXT, &inSet, &outSet, IARG_CALL_ORDER, callOrder, IARG_END);
     }
 }
 

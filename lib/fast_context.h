@@ -179,6 +179,21 @@ inline void WriteGenericReg(ThreadContext* tc, REG r, const PIN_REGISTER* val) {
     PIN_SetContextRegval(&tc->pinCtxt, r, (uint8_t*)val);
 }
 
+// Testing: even slower r/w variants using IARG_PARTIAL_CONTEXT
+void ReadGenericRegPartialCtxt(const ThreadContext* tc, REG r, CONTEXT* partialCtxt) {
+    CHECK_TC(tc);
+    uint8_t rv[8192];
+    PIN_GetContextRegval(&tc->pinCtxt, r, rv);
+    PIN_SetContextRegval(partialCtxt, r, rv);
+}
+
+void WriteGenericRegPartialCtxt(ThreadContext* tc, REG r, const CONTEXT* partialCtxt) {
+    CHECK_TC(tc);
+    uint8_t rv[8192];
+    PIN_GetContextRegval(partialCtxt, r, rv);
+    PIN_SetContextRegval(&tc->pinCtxt, r, rv);
+}
+
 }
 
 #endif  // CONTEXT_H_
