@@ -39,7 +39,9 @@
 
 mutex logMutex; // FIXME: To log.cpp
 
+// Switches are very frequent... comment unless you're explicitly debugging them
 #define DEBUG(args...) info(args)
+#define DEBUG_SWITCH(args...) //info(args)
 
 // Pin's limit is 2Kthreads (as of 2.12)
 #define MAX_THREADS 2048
@@ -339,7 +341,7 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
                 nextTid, (nextTid < MAX_THREADS)? threadStates[nextTid] : -1);
     }
 
-    DEBUG("[%d] Switching %d -> %d", tid, curTid, nextTid);
+    DEBUG_SWITCH("[%d] Switching %d -> %d", tid, curTid, nextTid);
     assert(threadStates[curTid] == RUNNING);
     if (!blockAfterSwitchcall) {
         threadStates[curTid] = IDLE;

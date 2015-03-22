@@ -193,6 +193,10 @@ namespace spin {
 /* Thread context state */
 std::array<ThreadContext, MAX_THREADS> contexts;
 
+uint64_t GetContextTid(const ThreadContext* tc) {
+    return tc - &contexts[0];
+}
+
 ThreadContext* GetTC(ThreadId tid) {
     assert(tid < MAX_THREADS);
     return &contexts[tid];
@@ -251,8 +255,11 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
 void executeAt(ThreadContext* tc, ADDRINT nextPc) {
     setReg(tc, REG_RIP, nextPc);
     // FIXME: These should not be necessary, if all users of executeAt actually return!
-    //UpdatePinContext(tc);
-    //PIN_ExecuteAt(GetPinCtxt(tc));
+    UpdatePinContext(tc);
+    CONTEXT* pinCtxt = GetPinCtxt(tc);
+    PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
+    PIN_SetContextReg(pinCtxt, tidReg, GetContextTid(tc));
+    PIN_ExecuteAt(GetPinCtxt(tc));
 }
 
 
@@ -464,18 +471,15 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
     for (uint32_t i = 0; i < 16; i++) compRegs((REG)((int)REG_GR_BASE + i), tc->gpRegs[i], "gpr");
 }
 
-uint64_t GetContextTid(const ThreadContext* tc) {
-    return tc - &contexts[0];
-}
-
 ThreadContext* SwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
     assert(tc);
     if (NeedsSwitch(nextThreadId)) {
+        WriteReg<REG_RIP>(tc, nextPC);  // MUST COME BEFORE RECORDSWITCH NOW
         RecordSwitch(tid, tc, nextThreadId);
     }
     WriteReg<REG_RIP>(tc, nextPC);
     assert(nextThreadId < MAX_THREADS);
-    DEBUG("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextThreadId);
+    DEBUG_SWITCH("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextThreadId);
 
 #if 1
     return &contexts[nextThreadId];
