@@ -485,6 +485,11 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
     for (uint32_t i = 0; i < 16; i++) compRegs((REG)((int)REG_GR_BASE + i), tc->gpRegs[i], "gpr");
 }
 
+// Should inline, note we use bitwise OR (|) and not short-circuiting OR (||) to avoid conditionals
+uint64_t RunSwitchHandler(uint64_t nextTid) {
+    return executeAtPC | NeedsSwitch(nextTid);
+}
+
 uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, ADDRINT nextPC, uint64_t nextTid) {
     ThreadContext* tc = (ThreadContext*)tcRegRef->qword[0];
     assert(tc);
@@ -494,26 +499,29 @@ uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, ADDRINT nextPC, uin
         assert(nextTid == curTid);
         WriteReg<REG_RIP>(tc, executeAtPC);
         executeAtPC = 0;
-        return 0;  // switch (we've changed the PC)
+        return -1ul;  // switch (we've changed the PC)
     } else {
+        assert(nextTid != curTid);
         WriteReg<REG_RIP>(tc, nextPC);
-    }
-    
-    if (NeedsSwitch(nextTid)) {
         RecordSwitch(tid, tc, nextTid);
+        tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
+        return -1ul;  // switch
     }
-    
-    assert(nextTid < MAX_THREADS);
+#if 0
     DEBUG_SWITCH("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextTid);
 
     // Update tc
     if (nextTid != curTid) {
         tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
-        return 0;  // switch
+        return -1ul;  // switch
     } else {
-        return 1;  // no switch
+        return curTid;  // no switch
     }
+#endif
 }
+
+// Used in SwitchHandler inlining
+uint64_t Subtract(uint64_t v1, uint64_t v2) { return v1 - v2; }
 
 void FindInOutRegs(INS ins, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     for (uint32_t i = 0; i < INS_MaxNumRRegs(ins); i++) {
@@ -739,12 +747,24 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             switchIPoints[idx].before[0]();
             IPOINT ipoint = IPOINT_BEFORE;
             
-            // Save whether we should switch to switchReg
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_REFERENCE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
-
-            // Switch to version 1 if switchReg == 1
-            INS_InsertVersionCase(idxToIns[idx], switchReg, 1, TRACE_VERSION_NOJUMP, IARG_END);
-            // NOTE: This won't work if 1->1 transitions just continue through the trace, but that doesn't seem to be the case.
+            // Save whether we should switch to to switchReg. Inlined for performance:
+            //  - If RunSwitchHandler() returns false, switchReg must have the
+            //    same value as tidReg (we're not switching)
+            //  - If it returns true, SwitchHandler() runs, and returns -1 if
+            //    we should switch, and curTid if we should not switch
+            //  - In both cases, subtracting (tidReg) - (switchReg) ->
+            //    switchReg produces 0 if we should change to version 1 (not
+            //    switching), and a non-zero value if we need to take the
+            //    indirect jump (switching)
+            INS_InsertIfCall(idxToIns[idx], ipoint, (AFUNPTR)RunSwitchHandler, IARG_REG_VALUE, switchReg, IARG_END);
+            INS_InsertThenCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_REFERENCE, tcReg,
+                    IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)Subtract, IARG_REG_VALUE, tidReg,
+                    IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            
+            // Go to to version 1 if switchReg == 0
+            INS_InsertVersionCase(idxToIns[idx], switchReg, 0, TRACE_VERSION_NOJUMP, IARG_END);
+            // NOTE: This wouldn't work if 1->1 transitions just continue through the trace, but that doesn't seem to be the case.
 
             // Otherwise, test failed, load PC and tidReg and do the jump
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
