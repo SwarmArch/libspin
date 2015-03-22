@@ -142,9 +142,16 @@ template <REG r> void ReadFPReg(const ThreadContext* tc, PIN_REGISTER* reg) {
 }
 
 // Slow, Pin does not inline, invalid for the regs above
-inline void ReadGenericReg(const ThreadContext* tc, REG r, PIN_REGISTER* val) {
+void ReadGenericReg(const ThreadContext* tc, REG r, PIN_REGISTER* val) {
     CHECK_TC(tc);
     PIN_GetContextRegval(&tc->pinCtxt, r, (uint8_t*)val);
+}
+
+// For x87 registers (ReadGenericReg does not work on them)
+void ReadFPState(const ThreadContext* tc, CONTEXT* partialCtxt) {
+    FPSTATE fpState;
+    PIN_GetContextFPState(&tc->pinCtxt, &fpState);
+    PIN_SetContextFPState(partialCtxt, &fpState);
 }
 
 /* Write interface */
@@ -179,61 +186,11 @@ inline void WriteGenericReg(ThreadContext* tc, REG r, const PIN_REGISTER* val) {
     PIN_SetContextRegval(&tc->pinCtxt, r, (uint8_t*)val);
 }
 
-// Testing: even slower r/w variants using IARG_PARTIAL_CONTEXT
-void ReadGenericRegPartialCtxt(const ThreadContext* tc, REG r, CONTEXT* partialCtxt) {
-    CHECK_TC(tc);
-    size_t regSize = REG_Size(r);
-    uint8_t rv[regSize];
-    PIN_GetContextRegval(&tc->pinCtxt, r, rv);
-    PIN_SetContextRegval(partialCtxt, r, rv);
-
-    std::stringstream ss;
-    // stringstream chokes on uint8_t... so cast to 32 bits
-    for (uint32_t i = 0; i < regSize; i++) {
-        ss << std::hex << std::setfill('0') << std::setw(2) << (uint32_t)rv[i] << " ";
-    }
-    info("Read %s [%d bytes]: %s", REG_StringShort(r).c_str(), regSize, ss.str().c_str());
-}
-
-void WriteGenericRegPartialCtxt(ThreadContext* tc, REG r, const CONTEXT* partialCtxt) {
-    CHECK_TC(tc);
-    size_t regSize = REG_Size(r);
-    uint8_t rv[regSize];
-    PIN_GetContextRegval(partialCtxt, r, rv);
-    PIN_SetContextRegval(&tc->pinCtxt, r, rv);
-
-    std::stringstream ss;
-    // stringstream chokes on uint8_t... so cast to 32 bits
-    for (uint32_t i = 0; i < regSize; i++) {
-        ss << std::hex << std::setfill('0') << std::setw(2) << (uint32_t)rv[i] << " ";
-    }
-    info("Written %s [%d bytes]: %s", REG_StringShort(r).c_str(), regSize, ss.str().c_str());
-}
-
-void ReadFPState(ThreadContext* tc, CONTEXT* partialCtxt) {
-    //FPSTATE fpState;
-    uint8_t fpState[FPSTATE_SIZE];
-    info("FPSTATE read %d %d %d %d | %d %d %d %d",
-            PIN_ContextContainsState(&tc->pinCtxt, PROCESSOR_STATE_X87),
-            PIN_ContextContainsState(&tc->pinCtxt, PROCESSOR_STATE_XMM),
-            PIN_ContextContainsState(&tc->pinCtxt, PROCESSOR_STATE_YMM),
-            PIN_ContextContainsState(&tc->pinCtxt, PROCESSOR_STATE_ZMM),
-            PIN_ContextContainsState(partialCtxt, PROCESSOR_STATE_X87),
-            PIN_ContextContainsState(partialCtxt, PROCESSOR_STATE_XMM),
-            PIN_ContextContainsState(partialCtxt, PROCESSOR_STATE_YMM),
-            PIN_ContextContainsState(partialCtxt, PROCESSOR_STATE_ZMM)
-            );
-    PIN_GetContextFPState(&tc->pinCtxt, (FPSTATE*)&fpState[0]);
-    PIN_SetContextFPState(partialCtxt, (FPSTATE*)&fpState[0]);
-    info("FPSTATE read done");
-}
-
+// For x87 registers (WriteGenericReg does not work on them)
 void WriteFPState(ThreadContext* tc, const CONTEXT* partialCtxt) {
     FPSTATE fpState;
-    info("FPSTATE write");
     PIN_GetContextFPState(partialCtxt, &fpState);
     PIN_SetContextFPState(&tc->pinCtxt, &fpState);
-
 }
 
 }
