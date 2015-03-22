@@ -251,8 +251,8 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
 void executeAt(ThreadContext* tc, ADDRINT nextPc) {
     setReg(tc, REG_RIP, nextPc);
     // FIXME: These should not be necessary, if all users of executeAt actually return!
-    UpdatePinContext(tc);
-    PIN_ExecuteAt(GetPinCtxt(tc));
+    //UpdatePinContext(tc);
+    //PIN_ExecuteAt(GetPinCtxt(tc));
 }
 
 
@@ -357,8 +357,8 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
         // Misc regs
         info("Generic RegRead %s", REG_StringShort(r).c_str());
         
-        fp = (AFUNPTR)ReadGenericReg;
-        INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
+        //fp = (AFUNPTR)ReadGenericReg;
+        //INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
     }
 }
 
@@ -443,8 +443,8 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
         // Misc regs
         info("Generic RegWrite %s", REG_StringShort(r).c_str());
 
-        fp = (AFUNPTR)WriteGenericReg;
-        INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
+        //fp = (AFUNPTR)WriteGenericReg;
+        //INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
     }
 }
 
