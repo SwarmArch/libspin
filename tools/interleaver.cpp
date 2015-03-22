@@ -141,7 +141,7 @@ void trace(TRACE trace, spin::TraceInfo& pt) {
             if (INS_IsMemoryRead(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
             if (INS_HasMemoryRead2(ins)) pt.insertCall(ins, IPOINT_BEFORE, (AFUNPTR) countLoad);
         }
-
+#if 1
         //INS tgtIns = BBL_InsTail(bbl); 
         INS tgtIns = BBL_InsHead(bbl);
         //if (!INS_Stutters(tgtIns) && !INS_IsSyscall(tgtIns) && BBL_InsHead(bbl) != tgtIns) {
@@ -153,6 +153,18 @@ void trace(TRACE trace, spin::TraceInfo& pt) {
                     IARG_UINT32, TRACE_Version(trace),
                     IARG_UINT32, tgtIns == BBL_InsHead(TRACE_BblHead(trace)));
         //}
+#else
+         // Instrument every instruction (functionally equivalent, should be a better test)
+         for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
+             pt.insertSwitchCall(ins, IPOINT_BEFORE, (AFUNPTR) countInstrsAndSwitch,
+                    IARG_SPIN_THREAD_ID,
+                    IARG_SPIN_CONST_CONTEXT,
+                    IARG_REG_VALUE, REG_RIP,
+                    IARG_UINT32, 1,
+                    IARG_UINT32, TRACE_Version(trace),
+                    IARG_UINT32, ins == BBL_InsHead(TRACE_BblHead(trace)));
+        }
+#endif
     }
 }
 
