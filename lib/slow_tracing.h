@@ -117,6 +117,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         ifun();
         // ...then the switch handler
         INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)NeedsSwitch,
+                IARG_REG_VALUE, tidReg,
                 IARG_REG_VALUE, switchReg, IARG_END);
         INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SwitchHandler,
                 IARG_THREAD_ID,

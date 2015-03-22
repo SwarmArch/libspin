@@ -486,8 +486,8 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
 }
 
 // Should inline, note we use bitwise OR (|) and not short-circuiting OR (||) to avoid conditionals
-uint64_t RunSwitchHandler(uint64_t nextTid) {
-    return executeAtPC | NeedsSwitch(nextTid);
+uint64_t RunSwitchHandler(uint64_t curTid, uint64_t nextTid) {
+    return executeAtPC | NeedsSwitch(curTid, nextTid);
 }
 
 uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, ADDRINT nextPC, uint64_t nextTid) {
@@ -756,7 +756,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             //    switchReg produces 0 if we should change to version 1 (not
             //    switching), and a non-zero value if we need to take the
             //    indirect jump (switching)
-            INS_InsertIfCall(idxToIns[idx], ipoint, (AFUNPTR)RunSwitchHandler, IARG_REG_VALUE, switchReg, IARG_END);
+            INS_InsertIfCall(idxToIns[idx], ipoint, (AFUNPTR)RunSwitchHandler, IARG_REG_VALUE, tidReg, IARG_REG_VALUE, switchReg, IARG_END);
             INS_InsertThenCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_REFERENCE, tcReg,
                     IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)Subtract, IARG_REG_VALUE, tidReg,

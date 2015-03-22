@@ -55,7 +55,7 @@ namespace spin {
     // Tracing routines need to be predicated on NeedsSwitch (which is
     // guaranteed to inline), and must call RecordSwitch to keep the executor
     // logic in sync.
-    inline uint64_t NeedsSwitch(uint64_t nextTid) __attribute__((always_inline));
+    inline uint64_t NeedsSwitch(uint64_t curTid, uint64_t nextTid) __attribute__((always_inline));
     void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid);
 };
 
@@ -352,8 +352,9 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     }
 }
 
-uint64_t NeedsSwitch(uint64_t nextTid) {
-    return (nextTid != curTid) | blockAfterSwitchcall;
+// Should inline, avoid conditionals. Note use of | instead of || and - instead of !=
+uint64_t NeedsSwitch(uint64_t curTid, uint64_t nextTid) {
+    return (nextTid - curTid) | blockAfterSwitchcall;
 }
 
 void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
