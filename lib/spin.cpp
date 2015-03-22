@@ -40,7 +40,7 @@
 mutex logMutex; // FIXME: To log.cpp
 
 // Switches are very frequent... comment unless you're explicitly debugging them
-#define DEBUG(args...) info(args)
+#define DEBUG(args...) //info(args)
 #define DEBUG_SWITCH(args...) //info(args)
 
 // Pin's limit is 2Kthreads (as of 2.12)
@@ -181,7 +181,7 @@ void WaitForExecutorRoleOrSyscall(THREADID tid, bool alwaysBlock);
 void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     executorMutex.lock();
     assert(PIN_GetContextReg(ctxt, tcReg) == (ADDRINT)nullptr);
-    info("[%d] In TraceGuard() (curTid %d rip 0x%lx er %d state %d ncap %d)", tid, curTid,
+    DEBUG("[%d] In TraceGuard() (curTid %d rip 0x%lx er %d state %d ncap %d)", tid, curTid,
             PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, tcReg),
             threadStates[tid], capturedThreads);
 
@@ -378,7 +378,7 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     if (!blockAfterSwitchcall) {
         threadStates[curTid] = IDLE;
     } else {
-        info("[%d] Blocking %d at switch", tid, curTid);
+        DEBUG("[%d] Blocking %d at switch", tid, curTid);
         threadStates[curTid] = BLOCKED;
         assert(capturedThreads > 1);
         capturedThreads--;
