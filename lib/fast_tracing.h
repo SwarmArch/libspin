@@ -252,14 +252,23 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
     }
 }
 
-void executeAt(ThreadContext* tc, ADDRINT nextPc) {
-    setReg(tc, REG_RIP, nextPc);
-    // FIXME: These should not be necessary, if all users of executeAt actually return!
+ADDRINT executeAtPC = 0ul;
+
+void executeAt(ThreadContext* tc, ADDRINT nextPC) {
+#if 0 
+    // This is correct but unnecessary, as users of executeAt must return
+    setReg(tc, REG_RIP, nextPC);
     UpdatePinContext(tc);
     CONTEXT* pinCtxt = GetPinCtxt(tc);
     PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
     PIN_SetContextReg(pinCtxt, tidReg, GetContextTid(tc));
     PIN_ExecuteAt(GetPinCtxt(tc));
+#else
+    // Instead, just record the PC and check it in SwitchHandler
+    assert(!executeAtPC);
+    executeAtPC = nextPC;
+    DEBUG("executeAtPC set %lx (tid %d)", executeAtPC, GetContextTid(tc));
+#endif
 }
 
 
@@ -471,39 +480,35 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
     for (uint32_t i = 0; i < 16; i++) compRegs((REG)((int)REG_GR_BASE + i), tc->gpRegs[i], "gpr");
 }
 
-ThreadContext* SwitchHandler(THREADID tid, ThreadContext* tc, ADDRINT nextPC, ADDRINT nextThreadId) {
+uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, ADDRINT nextPC, uint64_t nextTid) {
+    ThreadContext* tc = (ThreadContext*)tcRegRef->qword[0];
     assert(tc);
-    if (NeedsSwitch(nextThreadId)) {
-        WriteReg<REG_RIP>(tc, nextPC);  // MUST COME BEFORE RECORDSWITCH NOW
-        RecordSwitch(tid, tc, nextThreadId);
+    uint32_t curTid = GetContextTid(tc);
+    if (executeAtPC) {
+        DEBUG("[%d] executeAtPC %lx (instead of %lx) nextTid %d", tid, executeAtPC, nextPC, nextTid);
+        assert(nextTid == curTid);
+        WriteReg<REG_RIP>(tc, executeAtPC);
+        executeAtPC = 0;
+        return 0;  // switch (we've changed the PC)
+    } else {
+        WriteReg<REG_RIP>(tc, nextPC);
     }
-    WriteReg<REG_RIP>(tc, nextPC);
-    assert(nextThreadId < MAX_THREADS);
-    DEBUG_SWITCH("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextThreadId);
+    
+    if (NeedsSwitch(nextTid)) {
+        RecordSwitch(tid, tc, nextTid);
+    }
+    
+    assert(nextTid < MAX_THREADS);
+    DEBUG_SWITCH("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextTid);
 
-#if 1
-    return &contexts[nextThreadId];
-#else
-    // If you see corruption in registers, try this to do full-context swaps
-    // (you can then use CompareRegs even with multiple threads)
-    PIN_SetContextReg(&contexts[nextThreadId].pinCtxt, tcReg, (ADDRINT)&contexts[nextThreadId]);
-    PIN_SetContextReg(&contexts[nextThreadId].pinCtxt, tidReg, nextThreadId);
-    PIN_ExecuteAt(&contexts[nextThreadId].pinCtxt);
-    return nullptr;
-#endif
+    // Update tc
+    if (nextTid != curTid) {
+        tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
+        return 0;  // switch
+    } else {
+        return 1;  // no switch
+    }
 }
-
-// These are used for switchcall instrumentation
-ADDRINT CheckArgsMatch(ADDRINT tc, ADDRINT sw) {
-    return (tc == sw)? 1 : sw;
-}
-
-// Seems silly? Pin inlines, resulting in single-instruction register copy
-ADDRINT ReturnArg(ADDRINT arg) {
-    //info("ReturnArg %lx", arg);
-    return arg;
-}
-
 
 void FindInOutRegs(INS ins, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     for (uint32_t i = 0; i < INS_MaxNumRRegs(ins); i++) {
@@ -733,18 +738,14 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             switchIPoints[idx].before[0]();
             IPOINT ipoint = IPOINT_BEFORE;
             
-            // Save new tc to switchReg
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            // Save whether we should switch to switchReg
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_REFERENCE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
 
-            // Compare, return 1 on switchReg if they match (ie if we're not switching threads), otherwise leave switchReg untouched
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)CheckArgsMatch, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
-
-            // Switch to version 1 if switchReg == 1 (note this overload of switchReg is OK because no valid tc address will be 1)
+            // Switch to version 1 if switchReg == 1
             INS_InsertVersionCase(idxToIns[idx], switchReg, 1, TRACE_VERSION_NOJUMP, IARG_END);
             // NOTE: This won't work if 1->1 transitions just continue through the trace, but that doesn't seem to be the case.
 
-            // Otherwise, test failed, actually write tcReg and do the jump
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReturnArg, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, tcReg, IARG_END);
+            // Otherwise, test failed, load PC and tidReg and do the jump
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetContextTid, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg, IARG_END);
             INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
