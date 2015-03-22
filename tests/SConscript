@@ -17,8 +17,12 @@
 
 Import('env')
 progEnv = env.Clone()
-progEnv.Append(LINKFLAGS = ["-static"]) # better PC-based debugging
-srcs = Glob('*.cpp')
+progEnv.Append(LINKFLAGS = ['-static']) # better PC-based debugging
+srcs = Glob('*.cpp') + Glob('*.s')
 progs = map(lambda f: str(f).split("/")[-1].split(".")[0], srcs)
+
 for (prog, src) in zip(progs, srcs):
-    progEnv.Program(target = prog, source=src)
+    if src.path.endswith(".s"):
+        progEnv.Program(target = prog, source=src, LINKFLAGS=['-nostdlib'])
+    else:
+        progEnv.Program(target = prog, source=src)
