@@ -274,9 +274,37 @@ void executeAt(ThreadContext* tc, ADDRINT nextPC) {
 
 /* Context read/write instrumentation */
 
+static const std::set<REG> x87Regs = {REG_X87, REG_MXCSR, REG_ST0, REG_ST1, REG_ST2, REG_ST3, REG_ST4, REG_ST5, REG_ST6, REG_ST7};
+
+bool HasX87Regs(const std::set<REG>& regs) {
+    std::vector<REG> presentX87Regs;
+    std::set_intersection(regs.begin(), regs.end(), x87Regs.begin(), x87Regs.end(),
+            std::back_inserter(presentX87Regs));
+    return presentX87Regs.size();
+}
+
 void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG>& inRegs) {
+    // Not all x87 state is in accessible regs, and the REG_X87 pseudo-register
+    // can't be accessed through GetContextRegval. So every time we see X87, we
+    // copy the FP state among partial contexts wholesale.
+    //
+    // Note that reading the FP state comes *first*, before XMM/YMM reads,
+    // so that those can use the faster ReadFPReg calls.
+#if 1
+    if (HasX87Regs(inRegs)) {
+        REGSET inSet, outSet;
+        REGSET_Clear(inSet); REGSET_Clear(outSet);
+        for (auto r : x87Regs) REGSET_Insert(outSet, r);
+        //for (uint32_t i = REG_YMM_BASE; i <= REG_YMM_LAST; i++) REGSET_Insert(outSet, (REG)i);
+        
+        //REGSET_Insert(outSet, REG_X87);
+        INS_InsertCall(ins, ipoint, (AFUNPTR)ReadFPState, IARG_REG_VALUE, tcReg,
+                IARG_PARTIAL_CONTEXT, &inSet, &outSet, IARG_CALL_ORDER, callOrder, IARG_END);
+    }
+#endif
     for (REG r : inRegs) {
-        if (r == REG_RIP) continue;  // RIP must be handled differently
+        if (r == REG_RIP) continue;  // RIP is always loaded/saved in context switches
+        if (x87Regs.count(r)) continue;  // already handled
 
         AFUNPTR fp;
         bool nextClass = false;
@@ -363,26 +391,41 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
          * use it to get the FP state). For simplicity, we now use
          * IARG_PARTIAL_CONTEXT for all generics, but this could be expensive.
          */
-        if (r == REG_X87) continue;
-#if 0
+        //if (r == REG_X87) continue;
+#if 1
         // Misc regs
         info("Generic RegRead %s", REG_StringShort(r).c_str());
         // Fails for ST0-7, MXCSR
         //fp = (AFUNPTR)ReadGenericReg;
         //INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
 #endif
+/*
         // Seems to work in general
-        fp = (AFUNPTR)ReadGenericRegPartialCtxt;
+        fp = (r != REG_X87)? (AFUNPTR)ReadGenericRegPartialCtxt : (AFUNPTR)ReadFPState;
         REGSET inSet, outSet;
         REGSET_Clear(inSet); REGSET_Clear(outSet);
         REGSET_Insert(outSet, r);
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_PARTIAL_CONTEXT, &inSet, &outSet, IARG_CALL_ORDER, callOrder, IARG_END);
-    }
+*/    }
 }
 
-void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG>& inRegs) {
-    for (REG r : inRegs) {
+void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG>& outRegs) {
+    // Write X87 state. See comment in InsertRegReads
+    // Note this is safe even if the instructions do not modify the FP state,
+    // because the outRegs are added to the inRegs, so we always read the FP
+    // state if we write it. 
+#if 1
+    if (HasX87Regs(outRegs)) {
+        REGSET inSet, outSet;
+        REGSET_Clear(inSet); REGSET_Clear(outSet);
+        for (auto r : x87Regs) REGSET_Insert(inSet, r);
+        INS_InsertCall(ins, ipoint, (AFUNPTR)WriteFPState, IARG_REG_VALUE, tcReg,
+                IARG_PARTIAL_CONTEXT, &inSet, &outSet, IARG_CALL_ORDER, callOrder, IARG_END);
+    }
+#endif
+    for (REG r : outRegs) {
         if (r == REG_RIP) continue;  // RIP must be handled differently
+        if (x87Regs.count(r)) continue;  // already handled
 
         AFUNPTR fp;
         bool nextClass = false;
@@ -448,18 +491,20 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
         }
 
         // NOTE(dsm): See X87 comment above
-        if (r == REG_X87) continue;
+        //if (r == REG_X87) continue;
 
         if (r == REG_SEG_FS || r == REG_SEG_FS_BASE || r == REG_SEG_GS || r == REG_SEG_GS_BASE) {
             panic("Only supervisor instrs can write segment reg %s", REG_StringShort(r).c_str());
         }
-
+#if 0
         // Misc regs --- use generic and VERY SLOW writes through partial contexts
-        fp = (AFUNPTR)WriteGenericRegPartialCtxt;
+        //fp = (AFUNPTR)WriteGenericRegPartialCtxt;
+        fp = (r != REG_X87)? (AFUNPTR)WriteGenericRegPartialCtxt : (AFUNPTR)WriteFPState;
         REGSET inSet, outSet;
         REGSET_Clear(inSet); REGSET_Clear(outSet);
         REGSET_Insert(inSet, r);
         INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_ADDRINT, r, IARG_PARTIAL_CONTEXT, &inSet, &outSet, IARG_CALL_ORDER, callOrder, IARG_END);
+#endif
     }
 }
 
