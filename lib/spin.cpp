@@ -39,7 +39,7 @@
 
 mutex logMutex; // FIXME: To log.cpp
 
-#define DEBUG(args...) //info(args)
+#define DEBUG(args...) info(args)
 
 // Pin's limit is 2Kthreads (as of 2.12)
 #define MAX_THREADS 2048
@@ -172,13 +172,16 @@ uint64_t RunTraceGuard(uint64_t executor) {
     return !executor;
 }
 
+// Helper, see below (also used from RecordSwitch)
+void WaitForExecutorRoleOrSyscall(THREADID tid, bool alwaysBlock);
+
 // Runs only if we're coming back from a syscall
 void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
-    assert(PIN_GetContextReg(ctxt, tcReg) == (ADDRINT)nullptr);
-    DEBUG("[%d] In TraceGuard() (curTid %d rip 0x%lx er %d) [%d %d %d]", tid, curTid,
-            PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, tcReg),
-            threadStates[0], threadStates[1], threadStates[2]);
     executorMutex.lock();
+    assert(PIN_GetContextReg(ctxt, tcReg) == (ADDRINT)nullptr);
+    info("[%d] In TraceGuard() (curTid %d rip 0x%lx er %d state %d ncap %d)", tid, curTid,
+            PIN_GetContextReg(ctxt, REG_RIP), PIN_GetContextReg(ctxt, tcReg),
+            threadStates[tid], capturedThreads);
 
     ThreadContext* tc = GetTC(tid);
     InitContext(ctxt, tc);
@@ -222,15 +225,20 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         executorInSyscall = false;
     }
 
+    WaitForExecutorRoleOrSyscall(tid, false /*don't block if no executor*/);
+}
+
+// Must be called with executorLock held. Unlocks it. Never returns.
+void WaitForExecutorRoleOrSyscall(THREADID tid, bool alwaysBlock) {
     // If somebody else is the executor, wait until we're woken up, either
     // because we need to run a syscall or become the executor
-    while (executorTid != -1u) {
+    while (executorTid != -1u || alwaysBlock) {
         executorMutex.unlock();
         waitLocks[tid].lock();
         executorMutex.lock();
         if (threadStates[tid] == UNCAPTURED) {
             // Take syscall
-            DEBUG("[%d] TG: Wakeup, taking own syscall", tid);
+            DEBUG("[%d] WES%d: Wakeup, taking own syscall", tid, alwaysBlock);
             executorMutex.unlock();
             Execute(tid, true);
         } else if (executorTid == -1u) {
@@ -239,10 +247,10 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
             // thread could have been woken up to claim executor, but a thread
             // that came out of a syscall got it first. Thus waking up does not
             // automatically mean executorTid == -1u, so we check.
-            DEBUG("[%d] TG: Wakeup to claim executor", tid);
+            DEBUG("[%d] WES%d: Wakeup to claim executor", tid, alwaysBlock);
             break;
         } else {
-            DEBUG("[%d] TG: Spurious wakeup", tid);
+            DEBUG("[%d] WES%d: Spurious wakeup", tid, alwaysBlock);
         }
     }
 
@@ -251,7 +259,8 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     // Become executor
     executorTid = tid;
     assert(curTid < MAX_THREADS);
-    DEBUG("[%d] TG: Becoming executor, (curTid = %d, capturedThreads = %d)", tid, curTid, capturedThreads);
+    DEBUG("[%d] WES%d: Becoming executor, (curTid = %d, capturedThreads = %d)",
+            tid, alwaysBlock, curTid, capturedThreads);
     executorMutex.unlock();
     Execute(curTid, false);
 }
@@ -335,14 +344,31 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     if (!blockAfterSwitchcall) {
         threadStates[curTid] = IDLE;
     } else {
+        info("[%d] Blocking %d at switch", tid, curTid);
         threadStates[curTid] = BLOCKED;
+        assert(capturedThreads > 1);
         capturedThreads--;
         blockAfterSwitchcall = false;
     }
 
     curTid = nextTid;
     threadStates[curTid] = RUNNING;
-    executorMutex.unlock();
+    
+    // If we blocked ourselves, yield the executor role to curTid. This way,
+    // both BLOCKED and UNCAPTURED threads cannot be executors. Allowing
+    // BLOCKED threads to be executors runs into a weird corner case, where the
+    // executor is BLOCKED, and (2) capturedThreads == 1, and (3) the RUNNING
+    // thread executes a syscall. Normally, that thread would post a delayed
+    // uncapture and take the syscall. But it's complicated to do this in
+    // SyscallGuard(). 
+    if (threadStates[tid] == BLOCKED) {
+        executorTid = -1u;
+        DEBUG("[%d] RS: Waking real tid %d to run itself, and blocking ourselves", tid, curTid);
+        waitLocks[curTid].unlock();  // wake new executor
+        WaitForExecutorRoleOrSyscall(tid, true /*always block*/);
+    } else {
+        executorMutex.unlock();
+    }
 }
 
 /* Instrumentation */
@@ -429,7 +455,7 @@ REG __getTidReg() {
 
 void blockAfterSwitch() {
     assert(!blockAfterSwitchcall);
-    blockAfterSwitchcall = true;  // honored by SwitchHandler
+    blockAfterSwitchcall = true;  // honored by RecordSwitch
 }
 
 void blockIdleThread(ThreadId tid) {
