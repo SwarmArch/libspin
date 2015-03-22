@@ -238,9 +238,16 @@ void WaitForExecutorRoleOrSyscall(THREADID tid, bool alwaysBlock) {
         executorMutex.unlock();
         waitLocks[tid].lock();
         executorMutex.lock();
-        if (threadStates[tid] == UNCAPTURED) {
+        bool regularSyscall = (threadStates[tid] == UNCAPTURED);
+        // See SyscallGuard for the delayed uncapture code
+        // NOTE: Even if we were work up for a delayed syscall, an intervening
+        // thread may run the delayed uncapture. That is perfectly fine.
+        bool delayedUncaptureSyscall = threadStates[tid] == RUNNING && 
+            executorTid == tid && executorInSyscall;
+        if (regularSyscall || delayedUncaptureSyscall) {
             // Take syscall
-            DEBUG("[%d] WES%d: Wakeup, taking own syscall", tid, alwaysBlock);
+            DEBUG("[%d] WES%d: Wakeup, taking own syscall (%s)", tid, alwaysBlock,
+                    regularSyscall? "regular" : "delayed uncapture");
             executorMutex.unlock();
             Execute(tid, true);
         } else if (executorTid == -1u) {
@@ -283,16 +290,41 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     // ctxt may be valid or superfluous
     CoalesceContext(ctxt, GetTC(curTid));
 
-    // Three possibilities:
     if (curTid != tid) {
-        // 1. We need to ship off this syscall and move on to another thread 
-        assert(capturedThreads >= 2);  // both us and the tid we're running must be captured
-        uint32_t wakeTid = curTid;
-        UncaptureAndSwitch();  // changes curTid
-        waitLocks[wakeTid].unlock();  // wake syscall taker
-        DEBUG("[%d] SG: Shipping syscall to real tid %d, running %d", tid, wakeTid, curTid);
-        executorMutex.unlock();
-        Execute(curTid, false);
+        // We need to ship off this syscall and move on to another thread 
+        if (capturedThreads >= 2) {
+            // Both us and the tid we're running are captured and unblocked
+            uint32_t wakeTid = curTid;
+            UncaptureAndSwitch();  // changes curTid
+            waitLocks[wakeTid].unlock();  // wake syscall taker
+            DEBUG("[%d] SG: Shipping syscall to real tid %d, running %d", tid, wakeTid, curTid);
+            executorMutex.unlock();
+            Execute(curTid, false);
+        } else {
+            // There's a pretty complex corner case:
+            // 1. We're executing the last captured thread
+            // 2. We're blocked
+            //
+            // Previously, we tried to enforce that blocked threads are never
+            // executors to simplify this case.  Unfortunately, that would
+            // require two implementations of RecordSwitch for fast and slow
+            // modes. So tough it out.
+            assert(capturedThreads == 1);
+            assert(threadStates[tid] == BLOCKED);
+            
+            // We can't uncapture, as there's nothing to switch to! Instead:
+            // 1. Post a delayed uncapture
+            executorTid = curTid;
+            assert(!executorInSyscall);
+            executorInSyscall = true;
+            
+            // 2. Wake the other thread (who's in WaitForExecutor, see the matching logic there)
+            DEBUG("[%d] SG: Waking real tid %d to run its syscall, and blocking ourselves", tid, curTid);
+            waitLocks[curTid].unlock();  // wake new executor
+            
+            // 3. Block, as we are a blocked thread
+            WaitForExecutorRoleOrSyscall(tid, true /*always block*/);
+        }
     } else {
         // We ourselves need to take the syscall...
         if (capturedThreads >= 2) {
@@ -355,22 +387,7 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
 
     curTid = nextTid;
     threadStates[curTid] = RUNNING;
-    
-    // If we blocked ourselves, yield the executor role to curTid. This way,
-    // both BLOCKED and UNCAPTURED threads cannot be executors. Allowing
-    // BLOCKED threads to be executors runs into a weird corner case, where the
-    // executor is BLOCKED, and (2) capturedThreads == 1, and (3) the RUNNING
-    // thread executes a syscall. Normally, that thread would post a delayed
-    // uncapture and take the syscall. But it's complicated to do this in
-    // SyscallGuard(). 
-    if (threadStates[tid] == BLOCKED) {
-        executorTid = -1u;
-        DEBUG("[%d] RS: Waking real tid %d to run itself, and blocking ourselves", tid, curTid);
-        waitLocks[curTid].unlock();  // wake new executor
-        WaitForExecutorRoleOrSyscall(tid, true /*always block*/);
-    } else {
-        executorMutex.unlock();
-    }
+    executorMutex.unlock();
 }
 
 /* Instrumentation */
