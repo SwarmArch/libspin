@@ -670,10 +670,6 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         std::set<REG> inRegs, outRegs;
         FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
         
-        // TODO: Remove if we're sure we don't need these anymore
-        inRegs.insert(REG_SEG_FS_BASE);
-        inRegs.insert(REG_SEG_FS);
-
         InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_DEFAULT, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
