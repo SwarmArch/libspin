@@ -611,9 +611,14 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             break;
         }
         bool hasSwitch = switchIPoints[curEnd].after.size() || switchIPoints[curEnd+1].before.size();
-        bool closeSeq = callIPoints[curEnd].after.size() || callIPoints[curEnd+1].before.size() || hasSwitch ||
+        bool closeSeq = hasSwitch ||
             INS_IsSyscall(idxToIns[curEnd]) || INS_IsSyscall(idxToIns[curEnd+1]) ||
             INS_Stutters(idxToIns[curEnd]) || INS_Stutters(idxToIns[curEnd+1]);
+
+        // Uncomment to have callpoints close sequences. Necessary to pass
+        // contexts and read arbitrary regs from within normal calls. However,
+        // we do not do this now.
+        //closeSeq |= callIPoints[curEnd].after.size() || callIPoints[curEnd+1].before.size();
 
         if (closeSeq) {
             insSeqs.push_back(std::tie(curStart, curEnd));
@@ -621,7 +626,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         }
 
         // Comment to instrument whole traces (wasteful if switches are actually taken)
-        //if (hasSwitch) break;
+        if (hasSwitch) break;
 
         curEnd++;
     }
