@@ -36,7 +36,7 @@
  *
  * On regular traces, we add the following instrumentation to preserve the
  * register context:
- *  
+ *
  *  Original:
  *    BBL1: I1
  *          I2
@@ -82,7 +82,7 @@
  *  potential optimization is to detect when the call requests the SPIN_CONTEXT,
  *  and only read/write regs then). For example, with a normal call between I2
  *  and I3, we'd have:
- *  
+ *
  *          TraceGuard()
  *          ReadRegs(I1+I2)
  *          I1
@@ -95,7 +95,7 @@
  *
  * Conventional calls inserted at TAKEN_BRANCH points work similarly, though
  * we leverage the existing instrumentation:
- *          
+ *
  *         BR1 (taken_branch) -> WriteRegs(BBL1) + ConventionalCall()
  *
  * SwitchCalls always finish the trace, as they cause an indirect jump. A
@@ -124,7 +124,7 @@
  *
  * 1. If it's running its own context, then it needs to defer the role of the
  * executor to another thread and take the syscall.
- * 
+ *
  * 2. If it's running another context, then it needs to defer the syscall to
  * that context, and switch to another thread.
  *
@@ -219,7 +219,7 @@ uint64_t getReg(const ThreadContext* tc, REG reg) {
     reg = REG_FullRegName(reg);
     uint32_t regIdx = (uint32_t)reg;
     if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) return tc->gpRegs[regIdx - REG_GR_BASE];
-    
+
     switch (reg) {
         case REG_RIP: return tc->rip;
         case REG_RFLAGS: return tc->rflags;
@@ -252,10 +252,8 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
     }
 }
 
-ADDRINT executeAtPC = 0ul;
-
 void executeAt(ThreadContext* tc, ADDRINT nextPC) {
-#if 0 
+#if 0
     // This is correct but unnecessary, as users of executeAt must return
     setReg(tc, REG_RIP, nextPC);
     UpdatePinContext(tc);
@@ -265,8 +263,7 @@ void executeAt(ThreadContext* tc, ADDRINT nextPC) {
     PIN_ExecuteAt(GetPinCtxt(tc));
 #else
     // Instead, just record the PC and check it in SwitchHandler
-    assert(!executeAtPC);
-    executeAtPC = nextPC;
+    setReg(tc, REG_RIP, nextPC);
     DEBUG("executeAtPC set %lx (tid %d)", executeAtPC, GetContextTid(tc));
 #endif
 }
@@ -296,7 +293,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
         INS_InsertCall(ins, ipoint, (AFUNPTR)ReadFPState, IARG_REG_VALUE, tcReg,
                 IARG_PARTIAL_CONTEXT, &inSet, &outSet, IARG_CALL_ORDER, callOrder, IARG_END);
     }
-    
+
     for (REG r : inRegs) {
         if (r == REG_RIP) continue;  // RIP is always loaded/saved in context switches
         if (x87Regs.count(r)) continue;  // already handled
@@ -381,8 +378,7 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
     // Write X87 state. See comment in InsertRegReads
     // Note this is safe even if the instructions do not modify the FP state,
     // because the outRegs are added to the inRegs, so we always read the FP
-    // state if we write it. 
-#if 1
+    // state if we write it.
     if (HasX87Regs(outRegs)) {
         REGSET inSet, outSet;
         REGSET_Clear(inSet); REGSET_Clear(outSet);
@@ -390,7 +386,7 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
         INS_InsertCall(ins, ipoint, (AFUNPTR)WriteFPState, IARG_REG_VALUE, tcReg,
                 IARG_PARTIAL_CONTEXT, &inSet, &outSet, IARG_CALL_ORDER, callOrder, IARG_END);
     }
-#endif
+
     for (REG r : outRegs) {
         if (r == REG_RIP) continue;  // RIP must be handled differently
         if (x87Regs.count(r)) continue;  // already handled
@@ -474,7 +470,7 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
     auto compRegs = [=](REG r, ADDRINT tr, const char* str) {
         ADDRINT vr = PIN_GetContextReg(ctxt, r);
         if (vr != tr) {
-            info("%lx: Mismatch on %s %lx != %lx (%s)", 
+            info("%lx: Mismatch on %s %lx != %lx (%s)",
                     PIN_GetContextReg(ctxt, REG_RIP),
                     REG_StringShort(r).c_str(), vr, tr, str);
             assert(false);
@@ -486,38 +482,25 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
 }
 
 // Should inline, note we use bitwise OR (|) and not short-circuiting OR (||) to avoid conditionals
-uint64_t RunSwitchHandler(uint64_t curTid, uint64_t nextTid) {
-    return executeAtPC | NeedsSwitch(curTid, nextTid);
+// Because executeAt may change PC, this checks whether that's the case
+uint64_t RunSwitchHandler(uint64_t curTid, uint64_t nextTid, ThreadContext* tc, ADDRINT curPC) {
+    return NeedsSwitch(curTid, nextTid) | (ReadReg<REG_RIP>(tc) - curPC);
 }
 
-uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, ADDRINT nextPC, uint64_t nextTid) {
+uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, uint64_t nextTid, ADDRINT curPC) {
     ThreadContext* tc = (ThreadContext*)tcRegRef->qword[0];
     assert(tc);
     uint32_t curTid = GetContextTid(tc);
-    if (executeAtPC) {
-        DEBUG("[%d] executeAtPC %lx (instead of %lx) nextTid %d", tid, executeAtPC, nextPC, nextTid);
+    DEBUG_SWITCH("[%d] Switch @ 0x%lx tc %lx (%ld -> %ld)", tid, curPC, (uintptr_t)tc, curTid, nextTid);
+    if (ReadReg<REG_RIP>(tc) != curPC) {
         assert(nextTid == curTid);
-        WriteReg<REG_RIP>(tc, executeAtPC);
-        executeAtPC = 0;
-        return -1ul;  // switch (we've changed the PC)
+        DEBUG("[%d] executeAtPC %lx (instead of %lx)", tid, ReadReg<REG_RIP>(tc), curPC);
     } else {
         assert(nextTid != curTid);
-        WriteReg<REG_RIP>(tc, nextPC);
         RecordSwitch(tid, tc, nextTid);
         tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
-        return -1ul;  // switch
     }
-#if 0
-    DEBUG_SWITCH("Switch @ 0x%lx tc %lx (%ld -> %ld)", nextPC, (uintptr_t)tc, tc - &contexts[0], nextTid);
-
-    // Update tc
-    if (nextTid != curTid) {
-        tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
-        return -1ul;  // switch
-    } else {
-        return curTid;  // no switch
-    }
-#endif
+    return -1ul;  // switch
 }
 
 // Used in SwitchHandler inlining
@@ -550,7 +533,7 @@ void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t 
         INS ins = idxToIns[idx];  // you'd think INS_Next would work; not across BBLs!
         FindInOutRegs(ins, inRegs, outRegs);
     }
-    
+
     // Predicated instructions, partial updates, flags registers, etc., can
     // cause no or incomplete writes. We could try to be smart and precise, but
     // for now, do the simple thing and always read the regs written
@@ -585,7 +568,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
     if (INS_IsSyscall(idxToIns[0])) return;
 
     // Find callpoint and switchpoint order
-    
+
     struct IPoints {
         typedef std::vector<std::function<void()> > IPVec;
         IPVec before;
@@ -639,7 +622,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
 
         // Comment to instrument whole traces (wasteful if switches are actually taken)
         //if (hasSwitch) break;
-     
+
         curEnd++;
     }
 
@@ -683,7 +666,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
 
         std::set<REG> inRegs, outRegs;
         FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
-        
+
         InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_DEFAULT, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
@@ -738,15 +721,19 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         if (switchIPoints[idx].after.size()) panic("Switchcalls at IPOINT_AFTER not supported");
         if (switchIPoints[idx].taken_branch.size()) panic("Switchcalls at IPOINT_TAKEN_BRANCH not supported");
         if (switchIPoints[idx].before.size() > 1) panic("Multiple switchcalls per IPOINT not supported");
-        
+
         // Skip leading switchcall in NOJUMP version
         bool skipSwitchcall = (idx == 0 && TRACE_Version(trace) != TRACE_VERSION_DEFAULT);
-        
+
         if (switchIPoints[idx].before.size() && !skipSwitchcall) {
+            IPOINT ipoint = IPOINT_BEFORE;
+
+            // Save RIP (switchcall may read it)
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)WriteReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_END);
+
             // Insert switchcall
             switchIPoints[idx].before[0]();
-            IPOINT ipoint = IPOINT_BEFORE;
-            
+
             // Save whether we should switch to to switchReg. Inlined for performance:
             //  - If RunSwitchHandler() returns false, switchReg must have the
             //    same value as tidReg (we're not switching)
@@ -756,12 +743,13 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             //    switchReg produces 0 if we should change to version 1 (not
             //    switching), and a non-zero value if we need to take the
             //    indirect jump (switching)
-            INS_InsertIfCall(idxToIns[idx], ipoint, (AFUNPTR)RunSwitchHandler, IARG_REG_VALUE, tidReg, IARG_REG_VALUE, switchReg, IARG_END);
+            INS_InsertIfCall(idxToIns[idx], ipoint, (AFUNPTR)RunSwitchHandler, IARG_REG_VALUE, tidReg, IARG_REG_VALUE, switchReg,
+                    IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_END);
             INS_InsertThenCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_REFERENCE, tcReg,
-                    IARG_REG_VALUE, REG_RIP, IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+                    IARG_REG_VALUE, switchReg, IARG_REG_VALUE, REG_RIP, IARG_RETURN_REGS, switchReg, IARG_END);
             INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)Subtract, IARG_REG_VALUE, tidReg,
                     IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
-            
+
             // Go to to version 1 if switchReg == 0
             INS_InsertVersionCase(idxToIns[idx], switchReg, 0, TRACE_VERSION_NOJUMP, IARG_END);
             // NOTE: This wouldn't work if 1->1 transitions just continue through the trace, but that doesn't seem to be the case.
