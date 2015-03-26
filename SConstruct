@@ -25,8 +25,6 @@ if mode not in allowedModes:
     Exit(1)
 
 env = Environment(ENV = os.environ)
-env['CC'] = 'gcc-4.8'
-env['CXX'] = 'g++-4.8'
 
 env['CPPFLAGS'] = ['-std=c++11', '-Wall', '-Werror', '-Wno-unknown-pragmas',
     '-fomit-frame-pointer', '-fno-stack-protector']
@@ -34,7 +32,7 @@ env['CPPPATH'] = [os.path.abspath('include/')]
 
 modeFlags = {
     'opt' : ['-O3','-gdwarf-3'],
-    'release' : ['-O3', '-DNDEBUG', '-DNASSERT', '-gdwarf-3', '-march=native'],
+    'release' : ['-O3', '-DNDEBUG', '-DNASSERT', '-gdwarf-3', '-march=native', '-Wno-unused-variable'],
     'debug' : ['-O0', '-gdwarf-3'],
 }
 env.Append(CPPFLAGS = modeFlags[mode])
