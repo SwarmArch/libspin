@@ -28,7 +28,7 @@ int main() {
 
     asm volatile("rep stosb" :: "c"(strlen(s)-1), "a"(42), "D"(buf) : "cc", "memory");
 
-    printf(buf);
+    puts(buf);
 
     memset(buf, 0, sizeof(buf));
     strcpy(buf, "REPNZ SCASB finds the first instance of a @ byte\n");
@@ -38,7 +38,7 @@ int main() {
     printf("%d %c\n", pos, buf[pos]);
 
     if (buf[pos] == '@') {
-        printf(s);
+        puts(s);
     }
 
     return 0;
