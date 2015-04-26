@@ -264,7 +264,7 @@ void executeAt(ThreadContext* tc, ADDRINT nextPC) {
 #else
     // Instead, just record the PC and check it in SwitchHandler
     setReg(tc, REG_RIP, nextPC);
-    DEBUG("executeAtPC set %lx (tid %d)", executeAtPC, GetContextTid(tc));
+    DEBUG("nextPC set %lx (tid %d)", nextPC, GetContextTid(tc));
 #endif
 }
 
