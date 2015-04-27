@@ -274,6 +274,25 @@ void WaitForExecutorRoleOrSyscall(THREADID tid, bool alwaysBlock) {
     Execute(curTid, false);
 }
 
+void CheckForExitSyscall(THREADID tid, const CONTEXT* ctxt) {
+    // Address early termination --- Pin does not catch Fini in all cases
+    uint32_t syscall = PIN_GetSyscallNumber(ctxt, SYSCALL_STANDARD_IA32E_LINUX);
+    if (syscall == SYS_exit_group) {
+        info("[%d] Thread at exit syscall", tid);
+        // Before exiting, call the thread-end callback on all other threads.
+        for (THREADID otid = 0; otid < threadStates.size(); otid++) {
+            // N.B. we can't call ThreadFini
+            // 1) because it grabs the lock that is already held
+            // 2) even if one adds a non-locking ThreadFini, we can't guarantee
+            //    that all other threads are Uncaptured right now, so the
+            //    assertion in ThreadFini would be triggered.
+            // The latter point is concerning, but this seems to work.
+            if (tid != otid) threadEndCallback(otid);
+        }
+        exit(0);
+    }
+}
+
 uint64_t RunSyscallGuard(uint64_t executor) {
     return executor;
 }
@@ -289,6 +308,8 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     // Makes sure the thread's pinCtxt is updated. Depending on the tracing mode,
     // ctxt may be valid or superfluous
     CoalesceContext(ctxt, GetTC(curTid));
+
+    CheckForExitSyscall(tid, ctxt);
 
     if (curTid != tid) {
         // We need to ship off this syscall and move on to another thread
