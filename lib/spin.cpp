@@ -90,12 +90,13 @@ bool executorInSyscall;
 bool blockAfterSwitchcall;
 aligned_mutex executorMutex;
 
-// Callbacks, set on init
+// Callbacks, set on init or separately
 TraceCallback traceCallback = nullptr;
 CaptureCallback captureCallback = nullptr;
 UncaptureCallback uncaptureCallback = nullptr;
 ThreadCallback threadStartCallback = nullptr;
 ThreadCallback threadEndCallback = nullptr;
+SyscallEnterCallback syscallEnterCallback = nullptr;
 
 /* Helper debug method */
 void PrintContext(uint32_t tid, const char* desc, CONTEXT* ctxt) {
@@ -309,6 +310,22 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     // ctxt may be valid or superfluous
     CoalesceContext(ctxt, GetTC(curTid));
 
+    if (syscallEnterCallback) {
+        executorMutex.unlock();
+        ThreadContext* tc = GetTC(curTid);
+        // Update PC, which may be stale in ThreadContext
+        uint64_t pc = getReg(tc, REG_RIP);
+        syscallEnterCallback(curTid, tc);  // may call executeAt or change tc
+        // If executeAt is called, in slow mode we never reach this point,
+        // but in fast mode we do
+        if (getReg(tc, REG_RIP) != pc) {
+            DEBUG("syscallEnterCallback changed PC 0x%lx -> %lx (curTid %d), running Execute", pc, getReg(tc, REG_RIP), curTid);
+            Execute(curTid, false);  // does not return
+            panic("??");
+        }
+        executorMutex.lock();
+    }
+
     CheckForExitSyscall(tid, ctxt);
 
     if (curTid != tid) {
@@ -471,6 +488,11 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     TRACE_AddInstrumentFunction(InstrumentTrace, 0);
     PIN_AddThreadStartFunction(ThreadStart, 0);
     PIN_AddThreadFiniFunction(ThreadFini, 0);
+}
+
+void setSyscallEnterCallback(SyscallEnterCallback syscallEnterCb) {
+    if (syscallEnterCallback) DEBUG("Overriding previous syscallEnterCallback");
+    syscallEnterCallback = syscallEnterCb;
 }
 
 ThreadContext* getContext(ThreadId tid) {

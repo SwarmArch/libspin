@@ -46,6 +46,10 @@ namespace spin {
     typedef ThreadId (*UncaptureCallback)(ThreadId tid, ThreadContext* tc);
     typedef void (*ThreadCallback)(ThreadId tid);
 
+    // Unlike UncaptureCallback, this is (a) never delayed, and (b) callback can
+    // re-steer the thread to avoid the syscall using executeAt.
+    typedef void (*SyscallEnterCallback)(ThreadId tid, ThreadContext* tc);
+
     typedef std::vector< std::tuple<INS, IPOINT, std::function<void()> > > CallpointVector;
 
     // Internal methods --- used by IARG macros
@@ -90,6 +94,7 @@ namespace spin {
     // Initialization
     void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb,
             CaptureCallback captureCb, UncaptureCallback uncaptureCb);
+    void setSyscallEnterCallback(SyscallEnterCallback syscallEnterCb);
 
     // Context querying/manipulation methods
     uint64_t getReg(const ThreadContext* tc, REG reg);
@@ -105,7 +110,7 @@ namespace spin {
      * the control flow and continue execution from somewhere else. This
      * function might or might not return, and you must change the PC;
      * supplying the same PC as the current PC may cause an infinite loop.
-     * 
+     *
      * This is a wart in the interface to simplify and lower the overheads of
      * the slow-mode implementation. In fast mode, contexts are memory-backed
      * and can be modified from anywhere, and the PC can be modified in
