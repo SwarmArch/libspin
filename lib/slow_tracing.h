@@ -69,8 +69,6 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
 }
 
 void executeAt(ThreadContext* tc, ADDRINT nextPc) {
-    ADDRINT curPc = getReg(tc, REG_RIP);
-    assert(nextPc != curPc);  // will enter an infinite loop otherwise
     setReg(tc, REG_RIP, nextPc);
     PIN_ExecuteAt((CONTEXT*)tc);
 }
