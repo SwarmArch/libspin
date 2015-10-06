@@ -25,7 +25,12 @@
 #include <stdint.h>
 #include <tuple>
 #include <vector>
+
+#ifdef SPIN_BARE_PINH_INCLUDE
+#include "pin.H"
+#else
 #include "pin/pin.H"
+#endif
 
 #ifdef SPIN_SLOW
 #define IARG_SPIN_CONST_CONTEXT IARG_CONST_CONTEXT
@@ -95,6 +100,7 @@ namespace spin {
     void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb,
             CaptureCallback captureCb, UncaptureCallback uncaptureCb);
     void setSyscallEnterCallback(SyscallEnterCallback syscallEnterCb);
+    void setTerminateOnExitSyscall(bool term);  // default true
 
     // Context querying/manipulation methods
     uint64_t getReg(const ThreadContext* tc, REG reg);
