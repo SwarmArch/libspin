@@ -40,7 +40,7 @@
 mutex logMutex; // FIXME: To log.cpp
 
 // Switches are very frequent... comment unless you're explicitly debugging them
-#define DEBUG(args...) info(args)
+#define DEBUG(args...) //info(args)
 #define DEBUG_SWITCH(args...) //info(args)
 
 // Pin's limit is 2Kthreads (as of 2.12)
