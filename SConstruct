@@ -32,27 +32,16 @@ env['CPPPATH'] = [os.path.abspath('include/')]
 
 modeFlags = {
     'opt' : ['-O3','-gdwarf-3'],
-    'release' : ['-O3', '-DNDEBUG', '-DNASSERT', '-gdwarf-3', '-march=native', '-Wno-unused-variable'],
+    'release' : ['-O3', '-DNDEBUG', '-DNASSERT', '-gdwarf-3', '-Wno-unused-variable'],
     'debug' : ['-O0', '-gdwarf-3'],
 }
 env.Append(CPPFLAGS = modeFlags[mode])
 
-# Determine whether this machine supports AVX
-# http://amitsaha.github.io/site/notes/articles/python_linux/article.html
-isAvxAvailable = False;
-with open('/proc/cpuinfo') as f:
-    flags = ""
-    for line in f:
-        if line.strip() and line.rstrip('\n').startswith('flags'):
-            flags = line.rstrip('\n')
-            break;
-    if flags:
-        if 'avx' in flags.split():
-            env.Append(CPPFLAGS = '-mavx')
-            isAvxAvailable = True
-        if 'sse4_2' in flags.split(): env.Append(CPPFLAGS = '-msse4.2')
-        if 'sse4_1' in flags.split(): env.Append(CPPFLAGS = '-msse4.1')
-
+# AVX is required by spin-fast; this compiles SNB(mad/draco)-compatible code from anywhere
+# If you want to run on an architecture without AVX, make it a scons option,
+# don't make the flags depend on the compiling machine.
+archFlags = ['-march=corei7-avx', '-mavx', '-msse4.1', '-msse4.2']
+env.Append(CPPFLAGS = archFlags)
 
 # Environment for library (paths assume Pin 2.14)
 pinEnv = env.Clone()
@@ -86,8 +75,7 @@ pinEnv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
 
 genericToolEnv = pinEnv.Clone()
 
-speeds = ['slow'] + (['fast'] if isAvxAvailable else [])
-for speed in speeds:
+for speed in ['slow', 'fast']:
     spinLib = SConscript('lib/SConscript',
         variant_dir = os.path.join('build', mode, 'lib'),
         exports = {'env' : pinEnv, 'speed' : speed},
