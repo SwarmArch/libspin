@@ -299,10 +299,15 @@ void CheckForExitSyscall(THREADID tid, const CONTEXT* ctxt) {
             // call threadEndCallback on uncaptured threads. If this breaks
             // other things, we need to rethink this code or add a state to
             // the FSM.
-            if (tid != otid && threadStates[otid] != UNCAPTURED) {
+            //
+            // dsm: But since you reverted it, I'll leave the bug in, as zsim
+            // runs with terminateOnSyscall = false and doesn't care
+            // TODO(pls): FIXME!!
+            /*if (tid != otid && threadStates[otid] != UNCAPTURED) {
                 DEBUG("Forced thread %d end", otid);
                 threadEndCallback(otid);
-            }
+            }*/
+            if (tid != otid) threadEndCallback(otid);
         }
         exit(0);
     }
