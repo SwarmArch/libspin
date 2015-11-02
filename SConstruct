@@ -17,12 +17,21 @@
 
 import os
 
+def sanitizeInput(userinput, allowables):
+    if not (userinput in allowables):
+        print "Error: expected one of [{}], found {}".format( \
+                ', '.join(allowables), userinput)
+        Exit(1)
+
+
 # Get the mode flag from the command line
 mode = ARGUMENTS.get('mode', 'opt')
-allowedModes = ['debug', 'opt', 'release']
-if mode not in allowedModes:
-    print 'Error: invalid mode', mode, 'allowed:', allowedModes
-    Exit(1)
+sanitizeInput(mode, ['debug', 'opt', 'release'])
+
+# fast speed requires AVX.
+# fast speed implies building both fast and slow
+speedArg = ARGUMENTS.get('speed', 'fast')
+sanitizeInput(speedArg, ['slow', 'fast'])
 
 env = Environment(ENV = os.environ)
 
@@ -37,11 +46,12 @@ modeFlags = {
 }
 env.Append(CPPFLAGS = modeFlags[mode])
 
-# AVX is required by spin-fast; this compiles SNB(mad/draco)-compatible code from anywhere
-# If you want to run on an architecture without AVX, make it a scons option,
-# don't make the flags depend on the compiling machine.
-archFlags = ['-march=corei7-avx', '-mavx', '-msse4.1', '-msse4.2']
-env.Append(CPPFLAGS = archFlags)
+if speedArg == 'fast':
+    # AVX is required by spin-fast; this compiles SNB(mad/draco)-compatible code
+    # from anywhere.
+    # To build for an architecture without AVX, use the speed=slow scons option.
+    archFlags = ['-march=corei7-avx', '-mavx', '-msse4.1', '-msse4.2']
+    env.Append(CPPFLAGS = archFlags)
 
 # Environment for library (paths assume Pin 2.14)
 pinEnv = env.Clone()
@@ -75,7 +85,7 @@ pinEnv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
 
 genericToolEnv = pinEnv.Clone()
 
-for speed in ['slow', 'fast']:
+for speed in set(['slow', speedArg]):
     spinLib = SConscript('lib/SConscript',
         variant_dir = os.path.join('build', mode, 'lib'),
         exports = {'env' : pinEnv, 'speed' : speed},
