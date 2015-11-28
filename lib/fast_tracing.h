@@ -528,7 +528,7 @@ void FindInOutRegs(INS ins, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     }
 }
 
-void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t lastIdx, std::set<REG>& inRegs, std::set<REG>& outRegs) {
+void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t lastIdx, bool hasSwitch, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     for (uint32_t idx = firstIdx; idx <= lastIdx; idx++) {
         INS ins = idxToIns[idx];  // you'd think INS_Next would work; not across BBLs!
         FindInOutRegs(ins, inRegs, outRegs);
@@ -538,6 +538,17 @@ void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t 
     // cause no or incomplete writes. We could try to be smart and precise, but
     // for now, do the simple thing and always read the regs written
     for (REG r : outRegs) inRegs.insert(r);
+
+    // If this trace ends in a switchcall, read all the input regs of the
+    // following instruction, so that switchcall args like MEMORYREAD_EA work
+    // FIXME: This can be avoided by typechecking switchcalls
+    if (hasSwitch) {
+        std::set<REG> postSwitchInRegs, postSwitchOutRegs;
+        INS ins = idxToIns[lastIdx+1];
+        assert(INS_Valid(ins));
+        FindInOutRegs(ins, postSwitchInRegs, postSwitchOutRegs);
+        for (REG r : postSwitchInRegs) inRegs.insert(r);
+    }
 }
 
 std::string RegSetToStr(const std::set<REG> regs) {
@@ -602,12 +613,12 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
 
     // Find atomic instruction sequences (just looking at before/after points;
     // we handle taken branches differently)
-    std::vector< std::tuple<uint32_t, uint32_t> > insSeqs;
+    std::vector< std::tuple<uint32_t, uint32_t, bool> > insSeqs;
     uint32_t curStart = 0;
     uint32_t curEnd = 0;
     while (true) {
         if (curEnd == traceInstrs-1) {
-            insSeqs.push_back(std::tie(curStart, curEnd));
+            insSeqs.push_back(std::make_tuple(curStart, curEnd, false /* no hasSwitch */));
             break;
         }
         bool hasSwitch = switchIPoints[curEnd].after.size() || switchIPoints[curEnd+1].before.size();
@@ -621,7 +632,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         //closeSeq |= callIPoints[curEnd].after.size() || callIPoints[curEnd+1].before.size();
 
         if (closeSeq) {
-            insSeqs.push_back(std::tie(curStart, curEnd));
+            insSeqs.push_back(std::make_tuple(curStart, curEnd, hasSwitch));
             curStart = curEnd + 1;
         }
 
@@ -637,9 +648,10 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
     for (auto seq : insSeqs) {
         uint32_t firstIdx = std::get<0>(seq);
         uint32_t lastIdx = std::get<1>(seq);
+        bool hasSwitch = std::get<2>(seq);
         std::set<REG> inRegs, outRegs;
-        FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
-        info(" seq: %d-%d in:%s out:%s", firstIdx, lastIdx, RegSetToStr(inRegs).c_str(), RegSetToStr(outRegs).c_str());
+        FindInOutRegs(idxToIns, firstIdx, lastIdx, hasSwitch, inRegs, outRegs);
+        info(" seq: %d-%d%s in:%s out:%s", firstIdx, lastIdx, hasSwitch? "S" : "_", RegSetToStr(inRegs).c_str(), RegSetToStr(outRegs).c_str());
     }
     uint32_t maxInstr = std::get<1>(insSeqs[insSeqs.size()-1]);
     for (uint32_t idx = 0; idx < traceInstrs; idx++) {
@@ -668,11 +680,12 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
     for (auto seq : insSeqs) {
         uint32_t firstIdx = std::get<0>(seq);
         uint32_t lastIdx = std::get<1>(seq);
+        bool hasSwitch = std::get<2>(seq);
 
         std::set<REG> inRegs, outRegs;
-        FindInOutRegs(idxToIns, firstIdx, lastIdx, inRegs, outRegs);
+        FindInOutRegs(idxToIns, firstIdx, lastIdx, hasSwitch, inRegs, outRegs);
 
-        InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_DEFAULT, inRegs);
+        InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, (CALL_ORDER)(((int)CALL_ORDER_FIRST)+1), inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
 #ifdef DEBUG_COMPARE_REGS
@@ -685,7 +698,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         for (uint32_t idx = firstIdx; idx <= lastIdx; idx++) {
             if (INS_IsBranchOrCall(idxToIns[idx]) || INS_IsRet(idxToIns[idx])) {
                 std::set<REG> inRegs, outRegs;
-                FindInOutRegs(idxToIns, firstIdx, idx, inRegs, outRegs);
+                FindInOutRegs(idxToIns, firstIdx, idx, false, inRegs, outRegs);
                 InsertRegWrites(idxToIns[idx], IPOINT_TAKEN_BRANCH, CALL_ORDER_FIRST, outRegs);
 #ifdef DEBUG_COMPARE_REGS
                 INS_InsertCall(idxToIns[idx], IPOINT_TAKEN_BRANCH, (AFUNPTR)CompareRegs, IARG_REG_VALUE, tcReg, IARG_CONST_CONTEXT, IARG_CALL_ORDER, CALL_ORDER_FIRST+1, IARG_END);
