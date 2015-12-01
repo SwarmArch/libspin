@@ -279,6 +279,14 @@ bool HasX87Regs(const std::set<REG>& regs) {
     return presentX87Regs.size();
 }
 
+std::string RegSetToStr(const std::set<REG> regs) {
+    std::stringstream ss;
+    for (REG r : regs) {
+        ss << " " << REG_StringShort(r);
+    }
+    return ss.str();
+}
+
 void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set<REG>& inRegs) {
     // Not all x87 state is in accessible regs, and the REG_X87 pseudo-register
     // can't be accessed through GetContextRegval. So every time we see X87, we
@@ -551,14 +559,6 @@ void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t 
     }
 }
 
-std::string RegSetToStr(const std::set<REG> regs) {
-    std::stringstream ss;
-    for (REG r : regs) {
-        ss << " " << REG_StringShort(r);
-    }
-    return ss.str();
-}
-
 void Instrument(TRACE trace, const TraceInfo& pt) {
     // Order the trace's instructions
     std::vector<INS> idxToIns;
@@ -685,7 +685,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         std::set<REG> inRegs, outRegs;
         FindInOutRegs(idxToIns, firstIdx, lastIdx, hasSwitch, inRegs, outRegs);
 
-        InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, (CALL_ORDER)(((int)CALL_ORDER_FIRST)+1), inRegs);
+        InsertRegReads(idxToIns[firstIdx], IPOINT_BEFORE, CALL_ORDER_FIRST, inRegs);
         if (INS_HasFallThrough(idxToIns[lastIdx])) {
             InsertRegWrites(idxToIns[lastIdx], IPOINT_AFTER, CALL_ORDER_FIRST, outRegs);
 #ifdef DEBUG_COMPARE_REGS
