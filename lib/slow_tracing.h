@@ -77,10 +77,6 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
     }
 }
 
-void executeAt(ThreadContext* tc, ADDRINT nextPc) {
-    setReg(tc, REG_RIP, nextPc);
-}
-
 /* Instrumentation */
 void SwitchHandler(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     RecordSwitch(tid, tc, nextTid);

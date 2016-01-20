@@ -253,22 +253,6 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
     }
 }
 
-void executeAt(ThreadContext* tc, ADDRINT nextPC) {
-#if 0
-    // This is correct but unnecessary, as users of executeAt must return
-    setReg(tc, REG_RIP, nextPC);
-    UpdatePinContext(tc);
-    CONTEXT* pinCtxt = GetPinCtxt(tc);
-    PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)tc);
-    PIN_SetContextReg(pinCtxt, tidReg, GetContextTid(tc));
-    PIN_ExecuteAt(GetPinCtxt(tc));
-#else
-    // Instead, just record the PC and check it in SwitchHandler
-    setReg(tc, REG_RIP, nextPC);
-    DEBUG("nextPC set %lx (tid %d)", nextPC, GetContextTid(tc));
-#endif
-}
-
 /* Context read/write instrumentation */
 
 static const std::set<REG> x87Regs = {REG_X87, REG_MXCSR, REG_ST0, REG_ST1, REG_ST2, REG_ST3, REG_ST4, REG_ST5, REG_ST6, REG_ST7};

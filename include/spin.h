@@ -97,36 +97,10 @@ namespace spin {
     // Context querying/manipulation methods
     uint64_t getReg(const ThreadContext* tc, REG reg);
     void setReg(ThreadContext* tc, REG reg, uint64_t val);
-    //void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt);
-    //void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc);
 
     // NOTE: tid can be the running tid, but contexts should only be read and
     // modified from switchcalls!
     ThreadContext* getContext(ThreadId tid);
-
-    /* If you modify the current ThreadContext in a switchcall, you must call
-     * this routine immmediately befoere returning from the switchcall to alter
-     * the control flow and continue execution from somewhere else. This
-     * function might or might not return, and you must change the PC;
-     * supplying the same PC as the current PC may cause an infinite loop.
-     *
-     * This is a wart in the interface to simplify and lower the overheads of
-     * the slow-mode implementation. In fast mode, contexts are memory-backed
-     * and can be modified from anywhere, and the PC can be modified in
-     * switchcalls, so this does nothing but update the PC. But in slow mode,
-     * thread contexts are just Pin CONTEXTs, which Pin builds on the fly and
-     * discards after the analysis routine. For changes to take effect, we must
-     * use PIN_ExecuteAt in these cases. Alternatively, we could be more
-     * invasive and copy the context, pass that to the application, have getReg
-     * and setReg flag changes to the running context, and use ExecuteAt
-     * internally on that context copy, but that would be more complex and
-     * expensive. Since we uese this sparingly, this is the faster option,
-     * though the interface is ugly.
-     *
-     * TODO: Remove this function when the fast mode becomes reliable and we
-     * start using it widely.
-     */
-    void executeAt(ThreadContext* tc, ADDRINT nextPc);
 
     // Thread blocking/unblocking
     void blockAfterSwitch(); /* block current thread immediately after the switchcall; must have other running threads */
