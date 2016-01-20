@@ -57,7 +57,10 @@ namespace spin {
     // logic in sync.
     inline uint64_t NeedsSwitch(uint64_t curTid, uint64_t nextTid) __attribute__((always_inline));
     void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid);
+
+    // Routines used to infer whether we need to switch
     void NotifySetPC(uint32_t tid);
+    void NotifySetLiveReg();  // only used in slow mode
 };
 
 /* Context state and tracing functions */
@@ -86,6 +89,7 @@ enum SwitchFlags : uint8_t {
     SF_SETPC = 0x1,
     SF_BLOCK = 0x2,
     SF_LOOP = 0x4,
+    SF_SETLIVEREG = 0x8,
 };
 
 // Executor state (all strictly protected by executorMutex)
@@ -430,6 +434,9 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     if ((switchFlags & SF_BLOCK) && nextTid == curTid) {
         panic("[%d] Switchcall from thread %d called blockAfterSwitch(), but returned the same thread!", tid, curTid);
     }
+    if ((switchFlags & SF_SETLIVEREG) && !(switchFlags & SF_SETPC)) {
+        panic("[%d] Switchcall from thread %d called setReg() on the live context, but did not set a new PC. Unsupported in slow mode!", tid, curTid);
+    }
 
     assert(executorTid == tid);
     assert(curTid <= MAX_THREADS);
@@ -464,6 +471,11 @@ void NotifySetPC(uint32_t tid) {
         // NOTE: Will cause a switch even if the PC is the same
         switchFlags |= SF_SETPC;
     }
+}
+
+void NotifySetLiveReg() {
+    DEBUG("NotifySetLiveReg()");
+    switchFlags |= SF_SETLIVEREG;
 }
 
 /* Instrumentation */

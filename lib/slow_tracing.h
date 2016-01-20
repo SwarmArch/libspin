@@ -31,6 +31,9 @@
  * In slow mode, each normal analysis call works as-is without any extra
  * instrumentation. Each switchcall returns the next thread to run, and a
  * trailing switch handler uses SLOW PIN_ExecuteAt to switch to it.
+ *
+ * To support setReg(), the Pin context is saved wholesale before every
+ * switchcall.
  */
 
 namespace spin {
@@ -66,18 +69,22 @@ uint64_t getReg(const ThreadContext* tc, REG reg) {
 
 void setReg(ThreadContext* tc, REG reg, uint64_t val) {
     PIN_SetContextReg((CONTEXT*)tc, reg, val);
+    uint32_t tid = PIN_GetContextReg((CONTEXT*)tc, tidReg);
+    if (tid != -1u) {
+        // This is the live context
+        NotifySetLiveReg();
+        if (reg == REG_RIP) NotifySetPC(tid);
+    }
 }
 
 void executeAt(ThreadContext* tc, ADDRINT nextPc) {
     setReg(tc, REG_RIP, nextPc);
-    PIN_ExecuteAt((CONTEXT*)tc);
 }
 
 /* Instrumentation */
-void SwitchHandler(THREADID tid, ThreadContext* tc, uint64_t nextTid, const CONTEXT* ctxt) {
+void SwitchHandler(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     RecordSwitch(tid, tc, nextTid);
 
-    CoalesceContext(ctxt, tc);
     CONTEXT* pinCtxt = GetPinCtxt(tc);
     PIN_SetContextReg(pinCtxt, tcReg, (ADDRINT)nullptr);
     PIN_SetContextReg(pinCtxt, tidReg, -1);
@@ -111,7 +118,10 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         }
 
         if (ins == firstIns && ipoint == IPOINT_BEFORE && INS_IsSyscall(ins)) continue;
-        // First the switchcall...
+        // First, save the context
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)InitContext,
+                IARG_CONST_CONTEXT, IARG_REG_VALUE, tcReg, IARG_END);
+        // Then, run the switchcall...
         ifun();
         // ...then the switch handler
         INS_InsertIfCall(ins, IPOINT_BEFORE, (AFUNPTR)NeedsSwitch,
@@ -120,8 +130,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         INS_InsertThenCall(ins, IPOINT_BEFORE, (AFUNPTR)SwitchHandler,
                 IARG_THREAD_ID,
                 IARG_REG_VALUE, tcReg,
-                IARG_REG_VALUE, switchReg,
-                IARG_CONST_CONTEXT, IARG_END);
+                IARG_REG_VALUE, switchReg, IARG_END);
     }
 
 

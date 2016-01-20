@@ -32,16 +32,10 @@
 #include "pin/pin.H"
 #endif
 
-#ifdef SPIN_SLOW
-#define IARG_SPIN_CONST_CONTEXT IARG_CONST_CONTEXT
-#define IARG_SPIN_CONTEXT IARG_CONTEXT
-#else
-// Fast context macros to use in analysis routines
+#define IARG_SPIN_THREAD_ID IARG_REG_VALUE, spin::__getTidReg()
 // NOTE: We actually have no way to enforce constness, but have both defs to mirror Pin
 #define IARG_SPIN_CONST_CONTEXT IARG_REG_VALUE, spin::__getContextReg()
 #define IARG_SPIN_CONTEXT IARG_REG_VALUE, spin::__getContextReg()
-#endif
-#define IARG_SPIN_THREAD_ID IARG_REG_VALUE, spin::__getTidReg()
 
 namespace spin {
     // Types
@@ -58,9 +52,7 @@ namespace spin {
     typedef std::vector< std::tuple<INS, IPOINT, std::function<void()> > > CallpointVector;
 
     // Internal methods --- used by IARG macros
-#ifndef SPIN_SLOW
     REG __getContextReg();
-#endif
     REG __getTidReg();
     REG __getSwitchReg();
 
@@ -108,7 +100,8 @@ namespace spin {
     //void saveContext(const ThreadContext* tc, CONTEXT* pinCtxt);
     //void loadContext(const CONTEXT* pinCtxt, ThreadContext* tc);
 
-    // NOTE: tid must be != running tid, otherwise this context will be stale!
+    // NOTE: tid can be the running tid, but contexts should only be read and
+    // modified from switchcalls!
     ThreadContext* getContext(ThreadId tid);
 
     /* If you modify the current ThreadContext in a switchcall, you must call
