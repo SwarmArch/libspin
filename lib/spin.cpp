@@ -80,6 +80,13 @@ enum ThreadState  {
     //              On block/unblock: IDLE <-> BLOCKED
 };
 
+enum SwitchFlags : uint8_t {
+    SF_NONE = 0x0,
+    SF_SETPC = 0x1,
+    SF_BLOCK = 0x2,
+    SF_FORCE = 0x4,
+};
+
 // Executor state (all strictly protected by executorMutex)
 std::array<ThreadState, MAX_THREADS> threadStates;
 std::array<mutex, MAX_THREADS> waitLocks;
@@ -87,7 +94,7 @@ volatile uint32_t executorTid;  // volatile b/c it's speculatively checked outsi
 uint32_t curTid;
 uint32_t capturedThreads;
 bool executorInSyscall;
-bool blockAfterSwitchcall;
+uint8_t switchFlags;
 aligned_mutex executorMutex;
 
 // Callbacks, set on init or separately
@@ -411,7 +418,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
 
 // Should inline, avoid conditionals. Note use of | instead of || and - instead of !=
 uint64_t NeedsSwitch(uint64_t curTid, uint64_t nextTid) {
-    return (nextTid - curTid) | blockAfterSwitchcall;
+    return (nextTid - curTid) | switchFlags;
 }
 
 void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
@@ -419,12 +426,12 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     if (!tc) {
         panic("[%d] I was supposed to be the executor?? But it's %d", tid, executorTid);
     }
-    if (blockAfterSwitchcall && nextTid == curTid) {
+    if ((switchFlags & SF_BLOCK) && nextTid == curTid) {
         panic("[%d] Switchcall from thread %d called blockAfterSwitch(), but returned the same thread!", tid, curTid);
     }
 
     assert(executorTid == tid);
-    assert(nextTid != curTid);  // o/w NeedsSwitch would prevent us from running
+    //assert(nextTid != curTid);  // o/w NeedsSwitch would prevent us from running
     assert(curTid <= MAX_THREADS);
     if (nextTid >= MAX_THREADS || threadStates[nextTid] != IDLE) {
         panic("[%d] Switchcall returned invalid next tid %d (state %d)", tid,
@@ -433,16 +440,16 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
 
     DEBUG_SWITCH("[%d] Switching %d -> %d", tid, curTid, nextTid);
     assert(threadStates[curTid] == RUNNING);
-    if (!blockAfterSwitchcall) {
-        threadStates[curTid] = IDLE;
-    } else {
+    if (switchFlags & SF_BLOCK) {
         DEBUG("[%d] Blocking %d at switch", tid, curTid);
         threadStates[curTid] = BLOCKED;
         assert(capturedThreads > 1);
         capturedThreads--;
-        blockAfterSwitchcall = false;
+    } else {
+        threadStates[curTid] = IDLE;
     }
 
+    switchFlags = SF_NONE;
     curTid = nextTid;
     threadStates[curTid] = RUNNING;
     executorMutex.unlock();
@@ -491,7 +498,7 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     curTid = -1u;
     executorTid = -1u;
     executorInSyscall = false;
-    blockAfterSwitchcall = false;
+    switchFlags = SF_NONE;
     capturedThreads = 0;
 
     traceCallback = traceCb;
@@ -540,8 +547,8 @@ REG __getTidReg() {
 }
 
 void blockAfterSwitch() {
-    assert(!blockAfterSwitchcall);
-    blockAfterSwitchcall = true;  // honored by RecordSwitch
+    assert(!(switchFlags & SF_BLOCK));
+    switchFlags |= SF_BLOCK;  // honored by RecordSwitch
 }
 
 void blockIdleThread(ThreadId tid) {
@@ -564,9 +571,9 @@ void unblock(ThreadId tid) {
         // An unblock fired right after a call to blockAfterSwitch. This makes
         // blockAfterSwitch look functionally equivalent to being blocked
         // TODO: Simplify interface: block() and unblock() for arbitrary threads!
-        assert(blockAfterSwitchcall);
+        assert(switchFlags & SF_BLOCK);
         assert(threadStates[tid] == RUNNING);
-        blockAfterSwitchcall = false;
+        switchFlags &= ~SF_BLOCK;
     }
     executorMutex.unlock();
 }
