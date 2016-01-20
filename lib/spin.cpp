@@ -349,6 +349,10 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         syscallEnterCallback(curTid, tc);  // may call executeAt or change tc
         // If executeAt is called, in slow mode we never reach this point,
         // but in fast mode we do
+        // FIXME(dsm): I suspect this implementation is broken in corner cases:
+        // if some tc reg is changed, that will cause inconsistent switchFlags.
+        // I've left a panic() below that should catch any inconsistency.
+        if (switchFlags) panic("Inconsistent handling of tc writes in syscallEnterCallback()");
         if (getReg(tc, REG_RIP) != pc) {
             DEBUG("syscallEnterCallback changed PC 0x%lx -> %lx (curTid %d), running Execute", pc, getReg(tc, REG_RIP), curTid);
             Execute(curTid, false);  // does not return
