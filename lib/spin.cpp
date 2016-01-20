@@ -84,7 +84,7 @@ enum SwitchFlags : uint8_t {
     SF_NONE = 0x0,
     SF_SETPC = 0x1,
     SF_BLOCK = 0x2,
-    SF_FORCE = 0x4,
+    SF_LOOP = 0x4,
 };
 
 // Executor state (all strictly protected by executorMutex)
@@ -431,22 +431,22 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     }
 
     assert(executorTid == tid);
-    //assert(nextTid != curTid);  // o/w NeedsSwitch would prevent us from running
     assert(curTid <= MAX_THREADS);
+
+    assert(threadStates[curTid] == RUNNING);
+    threadStates[curTid] = IDLE;
+
     if (nextTid >= MAX_THREADS || threadStates[nextTid] != IDLE) {
         panic("[%d] Switchcall returned invalid next tid %d (state %d)", tid,
                 nextTid, (nextTid < MAX_THREADS)? threadStates[nextTid] : -1);
     }
 
     DEBUG_SWITCH("[%d] Switching %d -> %d", tid, curTid, nextTid);
-    assert(threadStates[curTid] == RUNNING);
     if (switchFlags & SF_BLOCK) {
         DEBUG("[%d] Blocking %d at switch", tid, curTid);
         threadStates[curTid] = BLOCKED;
         assert(capturedThreads > 1);
         capturedThreads--;
-    } else {
-        threadStates[curTid] = IDLE;
     }
 
     switchFlags = SF_NONE;
@@ -576,6 +576,10 @@ void unblock(ThreadId tid) {
         switchFlags &= ~SF_BLOCK;
     }
     executorMutex.unlock();
+}
+
+void loop() {
+    switchFlags |= SF_LOOP;
 }
 
 }  // namespace spin

@@ -498,16 +498,10 @@ uint64_t RunSwitchHandler(uint64_t curTid, uint64_t nextTid, ThreadContext* tc, 
 uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, uint64_t nextTid, ADDRINT curPC) {
     ThreadContext* tc = (ThreadContext*)tcRegRef->qword[0];
     assert(tc);
-    uint32_t curTid = GetContextTid(tc);
-    DEBUG_SWITCH("[%d] Switch @ 0x%lx tc %lx (%ld -> %ld)", tid, curPC, (uintptr_t)tc, curTid, nextTid);
-    if (ReadReg<REG_RIP>(tc) != curPC) {
-        assert(nextTid == curTid);
-        DEBUG("[%d] executeAtPC %lx (instead of %lx)", tid, ReadReg<REG_RIP>(tc), curPC);
-    } else {
-        assert(nextTid != curTid);
-        RecordSwitch(tid, tc, nextTid);
-        tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
-    }
+    DEBUG_SWITCH("[%d] Switch @ 0x%lx tc %lx (%ld -> %ld) sf %x", tid, curPC, (uintptr_t)tc,
+            GetContextTid(tc), nextTid, switchFlags);
+    RecordSwitch(tid, tc, nextTid);
+    tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
     return -1ul;  // switch
 }
 

@@ -139,6 +139,11 @@ namespace spin {
     void blockAfterSwitch(); /* block current thread immediately after the switchcall; must have other running threads */
     void blockIdleThread(ThreadId tid); /* thread must not be the running one */
     void unblock(ThreadId tid);
+
+    // Force the currently-running switchcall to run again, even if we return
+    // the same thread (returning a different thread will cause the switchcall
+    // to run again the next time this thread is invoked, as usual)
+    void loop();
 };
 
 #endif  // SPIN_H_
