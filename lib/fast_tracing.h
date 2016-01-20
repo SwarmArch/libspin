@@ -209,7 +209,7 @@ CONTEXT* GetPinCtxt(ThreadContext* tc) {
 // FIXME: Interface is kludgy; single-caller, cleaner to specialize spin.cpp
 void CoalesceContext(const CONTEXT* ctxt, ThreadContext* tc) {
     // RIP is the only valid ctxt reg that is out of date in tc
-    setReg(tc, REG_RIP, PIN_GetContextReg(ctxt, REG_RIP));
+    WriteReg<REG_RIP>(tc, PIN_GetContextReg(ctxt, REG_RIP));
     UpdatePinContext(tc);
 }
 
@@ -242,6 +242,7 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
     uint32_t regIdx = (uint32_t)reg;
     if (reg == REG_RIP) {
         tc->rip = val;
+        NotifySetPC(GetContextTid(tc));
     } else if (reg == REG_RFLAGS) {
         tc->rflags = val;
     } else if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) {
@@ -489,17 +490,11 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
     for (uint32_t i = 0; i < 16; i++) compRegs((REG)((int)REG_GR_BASE + i), tc->gpRegs[i], "gpr");
 }
 
-// Should inline, note we use bitwise OR (|) and not short-circuiting OR (||) to avoid conditionals
-// Because executeAt may change PC, this checks whether that's the case
-uint64_t RunSwitchHandler(uint64_t curTid, uint64_t nextTid, ThreadContext* tc, ADDRINT curPC) {
-    return NeedsSwitch(curTid, nextTid) | (ReadReg<REG_RIP>(tc) - curPC);
-}
-
-uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, uint64_t nextTid, ADDRINT curPC) {
+uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, uint64_t nextTid) {
     ThreadContext* tc = (ThreadContext*)tcRegRef->qword[0];
     assert(tc);
-    DEBUG_SWITCH("[%d] Switch @ 0x%lx tc %lx (%ld -> %ld) sf %x", tid, curPC, (uintptr_t)tc,
-            GetContextTid(tc), nextTid, switchFlags);
+    DEBUG_SWITCH("[%d] Switch @ 0x%lx tc %lx (%ld -> %ld) sf %x", tid, tc->rip,
+                 (uintptr_t)tc, GetContextTid(tc), nextTid, switchFlags);
     RecordSwitch(tid, tc, nextTid);
     tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
     return -1ul;  // switch
@@ -747,7 +742,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             switchIPoints[idx].before[0]();
 
             // Save whether we should switch to to switchReg. Inlined for performance:
-            //  - If RunSwitchHandler() returns false, switchReg must have the
+            //  - If NeedsSwitch() returns false, switchReg must have the
             //    same value as tidReg (we're not switching)
             //  - If it returns true, SwitchHandler() runs, and returns -1 if
             //    we should switch, and curTid if we should not switch
@@ -755,12 +750,16 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             //    switchReg produces 0 if we should change to version 1 (not
             //    switching), and a non-zero value if we need to take the
             //    indirect jump (switching)
-            INS_InsertIfCall(idxToIns[idx], ipoint, (AFUNPTR)RunSwitchHandler, IARG_REG_VALUE, tidReg, IARG_REG_VALUE, switchReg,
-                    IARG_REG_VALUE, tcReg, IARG_REG_VALUE, REG_RIP, IARG_END);
-            INS_InsertThenCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler, IARG_THREAD_ID, IARG_REG_REFERENCE, tcReg,
-                    IARG_REG_VALUE, switchReg, IARG_REG_VALUE, REG_RIP, IARG_RETURN_REGS, switchReg, IARG_END);
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)Subtract, IARG_REG_VALUE, tidReg,
-                    IARG_REG_VALUE, switchReg, IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertIfCall(idxToIns[idx], ipoint, (AFUNPTR)NeedsSwitch,
+                             IARG_REG_VALUE, tidReg, IARG_REG_VALUE, switchReg,
+                             IARG_END);
+            INS_InsertThenCall(idxToIns[idx], ipoint, (AFUNPTR)SwitchHandler,
+                               IARG_THREAD_ID, IARG_REG_REFERENCE, tcReg,
+                               IARG_REG_VALUE, switchReg,
+                               IARG_RETURN_REGS, switchReg, IARG_END);
+            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)Subtract,
+                           IARG_REG_VALUE, tidReg, IARG_REG_VALUE, switchReg,
+                           IARG_RETURN_REGS, switchReg, IARG_END);
 
             // Go to to version 1 if switchReg == 0
             INS_InsertVersionCase(idxToIns[idx], switchReg, 0, TRACE_VERSION_NOJUMP, IARG_END);

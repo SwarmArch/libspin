@@ -57,6 +57,7 @@ namespace spin {
     // logic in sync.
     inline uint64_t NeedsSwitch(uint64_t curTid, uint64_t nextTid) __attribute__((always_inline));
     void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid);
+    void NotifySetPC(uint32_t tid);
 };
 
 /* Context state and tracing functions */
@@ -453,6 +454,16 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
     curTid = nextTid;
     threadStates[curTid] = RUNNING;
     executorMutex.unlock();
+}
+
+void NotifySetPC(uint32_t tid) {
+    if (tid == curTid) {
+        DEBUG("NotifySetPC(): Changing PC of thread %d currently in switchcall", curTid);
+        // NOTE: We could assert that SF_SETPC is not set, but I do not see any
+        // reason to disallow multiple setReg calls in the same switchcall.
+        // NOTE: Will cause a switch even if the PC is the same
+        switchFlags |= SF_SETPC;
+    }
 }
 
 /* Instrumentation */
