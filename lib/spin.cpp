@@ -554,7 +554,7 @@ void setTerminateOnExitSyscall(bool term) {
 
 ThreadContext* getContext(ThreadId tid) {
     assert(tid < MAX_THREADS);
-    assert(threadStates[tid] == BLOCKED || threadStates[tid] == IDLE);
+    assert(threadStates[tid] != UNCAPTURED);
     return GetTC(tid);
 }
 
