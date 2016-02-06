@@ -264,7 +264,7 @@ bool HasX87Regs(const std::set<REG>& regs) {
     return presentX87Regs.size();
 }
 
-std::string RegSetToStr(const std::set<REG> regs) {
+std::string RegSetToStr(const std::set<REG>& regs) {
     std::stringstream ss;
     for (REG r : regs) {
         ss << " " << REG_StringShort(r);
@@ -509,7 +509,7 @@ void FindInOutRegs(INS ins, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     }
 }
 
-void FindInOutRegs(const std::vector<INS> idxToIns, uint32_t firstIdx, uint32_t lastIdx, bool hasSwitch, std::set<REG>& inRegs, std::set<REG>& outRegs) {
+void FindInOutRegs(const std::vector<INS>& idxToIns, uint32_t firstIdx, uint32_t lastIdx, bool hasSwitch, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     for (uint32_t idx = firstIdx; idx <= lastIdx; idx++) {
         INS ins = idxToIns[idx];  // you'd think INS_Next would work; not across BBLs!
         FindInOutRegs(ins, inRegs, outRegs);
@@ -558,18 +558,16 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
         IPVec before;
         IPVec after;
         IPVec taken_branch;
-
-        IPoints() {}
     };
 
-    IPoints callIPoints[traceInstrs];
-    IPoints switchIPoints[traceInstrs];
+    std::vector<IPoints> callIPoints(traceInstrs);
+    std::vector<IPoints> switchIPoints(traceInstrs);
 
-    auto findIPoints = [&](CallpointVector cvec, IPoints* ipoints) {
-        for (auto callpoint : cvec) {
+    auto findIPoints = [&](const CallpointVector& cvec, std::vector<IPoints>& ipoints) {
+        for (auto& callpoint : cvec) {
             INS ins = std::get<0>(callpoint);
             IPOINT ipoint = std::get<1>(callpoint);
-            auto ifun = std::get<2>(callpoint);
+            auto& ifun = std::get<2>(callpoint);
             uint32_t idx = insToIdx[ins];
             assert(idx < traceInstrs);
             switch (ipoint) {
@@ -650,7 +648,7 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
     // Insert reads and writes around instruction sequences
     // Reads: Last thing before first instr in sequence
     // Writes: First thing after last instr in sequence, and after taken branches
-    for (auto seq : insSeqs) {
+    for (auto& seq : insSeqs) {
         uint32_t firstIdx = std::get<0>(seq);
         uint32_t lastIdx = std::get<1>(seq);
         bool hasSwitch = std::get<2>(seq);
