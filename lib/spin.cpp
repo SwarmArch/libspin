@@ -346,18 +346,20 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         ThreadContext* tc = GetTC(curTid);
         // Update PC, which may be stale in ThreadContext
         uint64_t pc = getReg(tc, REG_RIP);
-        syscallEnterCallback(curTid, tc);  // may call executeAt or change tc
-        // If executeAt is called, in slow mode we never reach this point,
-        // but in fast mode we do
+        syscallEnterCallback(curTid, tc);  // may change tc
+
+        // Handle jumps
+        if (getReg(tc, REG_RIP) != pc) {
+            DEBUG("syscallEnterCallback changed PC 0x%lx -> %lx (curTid %d), running Execute", pc, getReg(tc, REG_RIP), curTid);
+            // Treat this like a switch; checks & unsets switchFlags, etc
+            RecordSwitch(tid, tc, curTid);
+            Execute(curTid, false);  // does not return
+            panic("??");
+        }
         // FIXME(dsm): I suspect this implementation is broken in corner cases:
         // if some tc reg is changed, that will cause inconsistent switchFlags.
         // I've left a panic() below that should catch any inconsistency.
         if (switchFlags) panic("Inconsistent handling of tc writes in syscallEnterCallback()");
-        if (getReg(tc, REG_RIP) != pc) {
-            DEBUG("syscallEnterCallback changed PC 0x%lx -> %lx (curTid %d), running Execute", pc, getReg(tc, REG_RIP), curTid);
-            Execute(curTid, false);  // does not return
-            panic("??");
-        }
         executorMutex.lock();
     }
 
