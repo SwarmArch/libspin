@@ -487,6 +487,17 @@ uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, uint64_t nextTid) {
 // Used in SwitchHandler inlining
 uint64_t Subtract(uint64_t v1, uint64_t v2) { return v1 - v2; }
 
+// Used to jump after rep instructions; Pin turns them into an implicit loop,
+// and jumping with InsertIndirectJump sometimes segfaults. Since they are
+// rare, we use full-blown ExecuteAt.
+void SlowJump(ThreadContext* tc) {
+    CONTEXT* ctxt = GetPinCtxt(tc);
+    PIN_SetContextReg(ctxt, tcReg, (ADDRINT)tc);
+    PIN_SetContextReg(ctxt, tidReg, (ADDRINT)GetContextTid(tc));
+    PIN_SetContextReg(ctxt, REG_RIP, (ADDRINT)ReadReg<REG_RIP>(tc));
+    PIN_ExecuteAt(ctxt);
+}
+
 void FindInOutRegs(INS ins, std::set<REG>& inRegs, std::set<REG>& outRegs) {
     for (uint32_t i = 0; i < INS_MaxNumRRegs(ins); i++) {
         REG reg = INS_RegR(ins, i);
@@ -748,9 +759,13 @@ void Instrument(TRACE trace, const TraceInfo& pt) {
             // NOTE: This wouldn't work if 1->1 transitions just continue through the trace, but that doesn't seem to be the case.
 
             // Otherwise, test failed, load PC and tidReg and do the jump
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
-            INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetContextTid, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg, IARG_END);
-            INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
+            if (INS_HasRealRep(idxToIns[idx])) {
+                INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)SlowJump, IARG_REG_VALUE, tcReg, IARG_END);
+            } else {
+                INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)ReadReg<REG_RIP>, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, switchReg, IARG_END);
+                INS_InsertCall(idxToIns[idx], ipoint, (AFUNPTR)GetContextTid, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, tidReg, IARG_END);
+                INS_InsertIndirectJump(idxToIns[idx], ipoint, switchReg);
+            }
 
             // Stop adding instrumentation to this trace, nothing should run after the jump
             break;

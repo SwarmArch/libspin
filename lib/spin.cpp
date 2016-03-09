@@ -455,7 +455,8 @@ void RecordSwitch(THREADID tid, ThreadContext* tc, uint64_t nextTid) {
                 nextTid, (nextTid < MAX_THREADS)? threadStates[nextTid] : -1);
     }
 
-    DEBUG_SWITCH("[%d] Switching %d -> %d", tid, curTid, nextTid);
+    DEBUG_SWITCH("[%d] Switching %d -> %d (%p -> %p)", tid, curTid, nextTid,
+                 getReg(tc, REG_RIP), getReg(getContext(nextTid), REG_RIP));
     if (switchFlags & SF_BLOCK) {
         DEBUG("[%d] Blocking %d at switch", tid, curTid);
         threadStates[curTid] = BLOCKED;
