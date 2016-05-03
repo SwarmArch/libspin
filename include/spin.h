@@ -111,6 +111,7 @@ namespace spin {
     // the same thread (returning a different thread will cause the switchcall
     // to run again the next time this thread is invoked, as usual)
     void loop();
+    bool isLoopSet();
 };
 
 #endif  // SPIN_H_
