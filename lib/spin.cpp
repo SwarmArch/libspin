@@ -114,7 +114,7 @@ SyscallEnterCallback syscallEnterCallback = nullptr;
 bool terminateOnExitSyscall = true;
 
 /* Helper debug method */
-void PrintContext(uint32_t tid, const char* desc, CONTEXT* ctxt) {
+void PrintContext(uint32_t tid, const char* desc, const CONTEXT* ctxt) {
     auto r = [&](REG reg) -> void* {
         return (void*)PIN_GetContextReg(ctxt, reg);
     };
