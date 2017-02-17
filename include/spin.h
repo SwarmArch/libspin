@@ -92,7 +92,6 @@ namespace spin {
     void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb,
             CaptureCallback captureCb, UncaptureCallback uncaptureCb);
     void setSyscallEnterCallback(SyscallEnterCallback syscallEnterCb);
-    void setTerminateOnExitSyscall(bool term);  // default true
 
     // Context querying/manipulation methods
     uint64_t getReg(const ThreadContext* tc, REG reg);

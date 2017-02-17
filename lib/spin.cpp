@@ -110,9 +110,6 @@ ThreadCallback threadStartCallback = nullptr;
 ThreadCallback threadEndCallback = nullptr;
 SyscallEnterCallback syscallEnterCallback = nullptr;
 
-// Other (read-only) options
-bool terminateOnExitSyscall = true;
-
 /* Helper debug method */
 void PrintContext(uint32_t tid, const char* desc, const CONTEXT* ctxt) {
     auto r = [&](REG reg) -> void* {
@@ -290,41 +287,6 @@ void WaitForExecutorRoleOrSyscall(THREADID tid, bool alwaysBlock) {
     Execute(curTid, false);
 }
 
-void CheckForExitSyscall(THREADID tid, const CONTEXT* ctxt) {
-    // Address early termination --- Pin does not catch Fini in all cases
-    // TODO (dsm): Revisit this. zsim has no problem with Fini.
-    // Seems like an ordspecsim problem.
-    uint32_t syscall = PIN_GetSyscallNumber(ctxt, SYSCALL_STANDARD_IA32E_LINUX);
-    if (syscall == SYS_exit_group && terminateOnExitSyscall) {
-        DEBUG("[%d] Thread at exit syscall", tid);
-        // Before exiting, call the thread-end callback on all other threads.
-        for (THREADID otid = 0; otid < threadStates.size(); otid++) {
-            // N.B. we can't call ThreadFini
-            // 1) because it grabs the lock that is already held
-            // 2) even if one adds a non-locking ThreadFini, we can't guarantee
-            //    that all other threads are Uncaptured right now, so the
-            //    assertion in ThreadFini would be triggered.
-            // The latter point is concerning, but this seems to work.
-            //
-            // dsm: This code is broken. threadStates.size() === MAX_THREADS,
-            // resulting in spurious threadEndCallbacks. Added a guard to not
-            // call threadEndCallback on uncaptured threads. If this breaks
-            // other things, we need to rethink this code or add a state to
-            // the FSM.
-            //
-            // dsm: But since you reverted it, I'll leave the bug in, as zsim
-            // runs with terminateOnSyscall = false and doesn't care
-            // TODO(pls): FIXME!!
-            /*if (tid != otid && threadStates[otid] != UNCAPTURED) {
-                DEBUG("Forced thread %d end", otid);
-                threadEndCallback(otid);
-            }*/
-            if (tid != otid) threadEndCallback(otid);
-        }
-        exit(0);
-    }
-}
-
 uint64_t RunSyscallGuard(uint64_t executor) {
     return executor;
 }
@@ -362,8 +324,6 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         if (switchFlags) panic("Inconsistent handling of tc writes in syscallEnterCallback()");
         executorMutex.lock();
     }
-
-    CheckForExitSyscall(tid, ctxt);
 
     if (curTid != tid) {
         // We need to ship off this syscall and move on to another thread
@@ -549,10 +509,6 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
 void setSyscallEnterCallback(SyscallEnterCallback syscallEnterCb) {
     if (syscallEnterCallback) DEBUG("Overriding previous syscallEnterCallback");
     syscallEnterCallback = syscallEnterCb;
-}
-
-void setTerminateOnExitSyscall(bool term) {
-    terminateOnExitSyscall = term;
 }
 
 ThreadContext* getContext(ThreadId tid) {
