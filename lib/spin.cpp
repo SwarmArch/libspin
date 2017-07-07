@@ -100,6 +100,8 @@ uint32_t curTid;
 uint32_t capturedThreads;
 bool executorInSyscall;
 uint8_t switchFlags;
+// volatile b/c it's speculatively checked outside of a critical section
+volatile bool inUncaptureCallback;
 aligned_mutex executorMutex;
 
 // Callbacks, set on init or separately
@@ -158,7 +160,14 @@ void ThreadFini(THREADID tid, const CONTEXT* ctxt, INT32 code, VOID* v) {
 
 // Helper method for guards. Must be called with executorMutex held
 void UncaptureAndSwitch() {
+    // The callback may run code that calls spin::unblock and spin::block. For
+    // example, in ordspecsim, in an effort to find a next thread, the simulator
+    // could process several non-thread events, some of which affect thread
+    // state, e.g. AbortTaskOnThread. If the uncaptureCallback calls
+    // spin::unblock, it's safe to skip the lock, since we know it's held.
+    inUncaptureCallback = true;
     uint64_t nextTid = uncaptureCallback(curTid, GetTC(curTid));
+    inUncaptureCallback = false;
     if (nextTid >= MAX_THREADS) panic("Switchcall returned invalid tid %d", nextTid);
     if (threadStates[nextTid] != IDLE) {
         panic("Switchcall returned tid %d, which is not IDLE (state[%d] = %d, curTid = %d executorTid = %d)",
@@ -538,17 +547,17 @@ void blockAfterSwitch() {
 }
 
 void blockIdleThread(ThreadId tid) {
-    executorMutex.lock();
+    if (!inUncaptureCallback) executorMutex.lock();
     assert(tid < MAX_THREADS);
     assert(threadStates[tid] == IDLE);
     assert(capturedThreads > 1);
     threadStates[tid] = BLOCKED;
     capturedThreads--;
-    executorMutex.unlock();
+    if (!inUncaptureCallback) executorMutex.unlock();
 }
 
 void unblock(ThreadId tid) {
-    executorMutex.lock();
+    if (!inUncaptureCallback) executorMutex.lock();
     assert(tid < MAX_THREADS);
     if (threadStates[tid] == BLOCKED) {
         threadStates[tid] = IDLE;
@@ -561,7 +570,7 @@ void unblock(ThreadId tid) {
         assert(threadStates[tid] == RUNNING);
         switchFlags &= ~SF_BLOCK;
     }
-    executorMutex.unlock();
+    if (!inUncaptureCallback) executorMutex.unlock();
 }
 
 void loop() {
