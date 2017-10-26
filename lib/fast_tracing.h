@@ -477,8 +477,8 @@ void CompareRegs(ThreadContext* tc, const CONTEXT* ctxt) {
 uint64_t SwitchHandler(THREADID tid, PIN_REGISTER* tcRegRef, uint64_t nextTid) {
     ThreadContext* tc = (ThreadContext*)tcRegRef->qword[0];
     assert(tc);
-    DEBUG_SWITCH("[%d] Switch @ 0x%lx tc %lx (%ld -> %ld) sf %x", tid, tc->rip,
-                 (uintptr_t)tc, GetContextTid(tc), nextTid, switchFlags);
+    DEBUG_SWITCH("[%d] Switch @ 0x%lx tc %lx (%ld -> %ld)", tid, tc->rip,
+                 (uintptr_t)tc, GetContextTid(tc), nextTid);
     RecordSwitch(tid, tc, nextTid);
     tcRegRef->qword[0] = (ADDRINT)GetTC(nextTid);
     return -1ul;  // switch

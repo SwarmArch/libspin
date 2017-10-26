@@ -110,7 +110,8 @@ CaptureCallback captureCallback = nullptr;
 UncaptureCallback uncaptureCallback = nullptr;
 ThreadCallback threadStartCallback = nullptr;
 ThreadCallback threadEndCallback = nullptr;
-SyscallEnterCallback syscallEnterCallback = nullptr;
+SyscallCallback syscallEnterCallback = nullptr;
+SyscallCallback syscallExitCallback = nullptr;
 
 /* Helper debug method */
 void PrintContext(uint32_t tid, const char* desc, const CONTEXT* ctxt) {
@@ -210,6 +211,17 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
     ThreadContext* tc = GetTC(tid);
     InitContext(ctxt, tc);
 
+    // syscallExitCallback may change tc, but unlike with syscallEnter, we
+    // don't need to do anything special to handle changes to the PC.
+    //
+    // NOTE: syscallExitCallback gets called on every syscall exit AND on
+    // thread start. This is sensible (the forked/spawned thread is moving into
+    // userspace after all), but it's not Pin behavior and there's not a
+    // matching syscallEnter (same this as how sys_exit has an enter but not an
+    // exit). Leaving as-is because API users don't care, but we could filter
+    // out the first entry into userspace.
+    if (syscallExitCallback) syscallExitCallback(tid, tc);
+
     if (threadStates[tid] == RUNNING) {
         // We did not yield executor role when we ran the syscall, so keep
         // going as usual
@@ -224,12 +236,12 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
 
     assert(threadStates[tid] == UNCAPTURED);
     bool runsNext = (capturedThreads == 0);
-    captureCallback(tid, runsNext);
-
-    // captureCallback yields our context to others. After this point, tc might have changed.
 
     capturedThreads++;
     threadStates[tid] = IDLE;
+
+    captureCallback(tid, runsNext);
+    // captureCallback yields our context to others. After this point, tc might have changed.
 
     if (runsNext) {
         DEBUG("[%d] TG: Only captured thread", tid);
@@ -515,9 +527,14 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     PIN_AddThreadFiniFunction(ThreadFini, 0);
 }
 
-void setSyscallEnterCallback(SyscallEnterCallback syscallEnterCb) {
+void setSyscallEnterCallback(SyscallCallback syscallEnterCb) {
     if (syscallEnterCallback) DEBUG("Overriding previous syscallEnterCallback");
     syscallEnterCallback = syscallEnterCb;
+}
+
+void setSyscallExitCallback(SyscallCallback syscallExitCb) {
+    if (syscallExitCallback) DEBUG("Overriding previous syscallExitCallback");
+    syscallExitCallback = syscallExitCb;
 }
 
 ThreadContext* getContext(ThreadId tid) {

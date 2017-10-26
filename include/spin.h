@@ -47,7 +47,7 @@ namespace spin {
 
     // Unlike UncaptureCallback, this is (a) never delayed, and (b) callback can
     // re-steer the thread to avoid the syscall using executeAt.
-    typedef void (*SyscallEnterCallback)(ThreadId tid, ThreadContext* tc);
+    typedef void (*SyscallCallback)(ThreadId tid, ThreadContext* tc);
 
     typedef std::vector< std::tuple<INS, IPOINT, std::function<void()> > > CallpointVector;
 
@@ -91,7 +91,8 @@ namespace spin {
     // Initialization
     void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb,
             CaptureCallback captureCb, UncaptureCallback uncaptureCb);
-    void setSyscallEnterCallback(SyscallEnterCallback syscallEnterCb);
+    void setSyscallEnterCallback(SyscallCallback syscallEnterCb);
+    void setSyscallExitCallback(SyscallCallback syscallExitCb);
 
     // Context querying/manipulation methods
     uint64_t getReg(const ThreadContext* tc, REG reg);
