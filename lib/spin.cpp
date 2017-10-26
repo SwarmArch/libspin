@@ -99,6 +99,7 @@ volatile uint32_t executorTid;  // volatile b/c it's speculatively checked outsi
 uint32_t curTid;
 uint32_t capturedThreads;
 bool executorInSyscall;
+bool delayedUncaptureAllowed;  // valid only when executor is in syscall
 uint8_t switchFlags;
 // volatile b/c it's speculatively checked outside of a critical section
 volatile bool inUncaptureCallback;
@@ -110,8 +111,8 @@ CaptureCallback captureCallback = nullptr;
 UncaptureCallback uncaptureCallback = nullptr;
 ThreadCallback threadStartCallback = nullptr;
 ThreadCallback threadEndCallback = nullptr;
-SyscallCallback syscallEnterCallback = nullptr;
-SyscallCallback syscallExitCallback = nullptr;
+SyscallEnterCallback syscallEnterCallback = nullptr;
+SyscallExitCallback syscallExitCallback = nullptr;
 
 /* Helper debug method */
 void PrintContext(uint32_t tid, const char* desc, const CONTEXT* ctxt) {
@@ -227,7 +228,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         // going as usual
         assert(executorTid == tid);
         assert(curTid == tid);
-        assert(capturedThreads == 1);
+        assert(capturedThreads == 1 || !delayedUncaptureAllowed);
         executorInSyscall = false;
         DEBUG("[%d] TG: Single thread, becoming executor", tid);
         executorMutex.unlock();
@@ -251,7 +252,7 @@ void TraceGuard(THREADID tid, const CONTEXT* ctxt) {
         curTid = tid;
     }
 
-    if (executorInSyscall) {
+    if (executorInSyscall && delayedUncaptureAllowed) {
         DEBUG("[%d] TG: Executor is in syscall, running delayed uncapture", tid);
         assert(curTid == executorTid);
         assert(capturedThreads == 2);  // the non-uncaptured executor and us
@@ -272,16 +273,20 @@ void WaitForExecutorRoleOrSyscall(THREADID tid, bool alwaysBlock) {
         executorMutex.unlock();
         waitLocks[tid].lock();
         executorMutex.lock();
-        bool regularSyscall = (threadStates[tid] == UNCAPTURED);
-        // See SyscallGuard for the delayed uncapture code
-        // NOTE: Even if we were work up for a delayed syscall, an intervening
-        // thread may run the delayed uncapture. That is perfectly fine.
-        bool delayedUncaptureSyscall = threadStates[tid] == RUNNING &&
+
+        // A thread may take a syscall either when it's uncaptured or while
+        // still captured **and the executor**. If it's captured and
+        // delayedUncaputreAllowed is set, then another thread returning from a
+        // syscall can perform a delayed uncapture: uncapturing the executor
+        // and claiming the executor role itself. See SyscallGuard for the
+        // delayed uncapture code.
+        bool syscallWhileUncaptured = (threadStates[tid] == UNCAPTURED);
+        bool syscallWhileCaptured = threadStates[tid] == RUNNING &&
             executorTid == tid && executorInSyscall;
-        if (regularSyscall || delayedUncaptureSyscall) {
+        if (syscallWhileUncaptured || syscallWhileCaptured) {
             // Take syscall
             DEBUG("[%d] WES%d: Wakeup, taking own syscall (%s)", tid, alwaysBlock,
-                    regularSyscall? "regular" : "delayed uncapture");
+                    syscallWhileCaptured? "(uncaptured)" : "(captured)");
             executorMutex.unlock();
             Execute(tid, true);
         } else if (executorTid == -1u) {
@@ -324,12 +329,19 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
     // ctxt may be valid or superfluous
     CoalesceContext(ctxt, GetTC(curTid));
 
+    // syscallEnterCallback's return value allows or disallows uncaptures. By
+    // default, every syscall may go through an uncapture/capture cycle so that
+    // the thread may sleep in the kernel without causing the tool to deadlock.
+    // But if they are disallowed, spin stops while the thread is in a syscall.
+    // If the syscall is non-blocking this is safe, and prevents the syscall
+    // from running concurrently with other threads.
+    bool uncaptureAllowed = true;
     if (syscallEnterCallback) {
         executorMutex.unlock();
         ThreadContext* tc = GetTC(curTid);
         // Update PC, which may be stale in ThreadContext
         uint64_t pc = getReg(tc, REG_RIP);
-        syscallEnterCallback(curTid, tc);  // may change tc
+        uncaptureAllowed = syscallEnterCallback(curTid, tc);  // may change tc
 
         // Handle jumps
         if (getReg(tc, REG_RIP) != pc) {
@@ -348,7 +360,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
 
     if (curTid != tid) {
         // We need to ship off this syscall and move on to another thread
-        if (capturedThreads >= 2) {
+        if (capturedThreads >= 2 && uncaptureAllowed) {
             // Both us and the tid we're running are captured and unblocked
             uint32_t wakeTid = curTid;
             UncaptureAndSwitch();  // changes curTid
@@ -365,14 +377,19 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
             // executors to simplify this case.  Unfortunately, that would
             // require two implementations of RecordSwitch for fast and slow
             // modes. So tough it out.
-            assert(capturedThreads == 1);
-            assert(threadStates[tid] == BLOCKED);
+            //
+            // In addition, we now take this path when syscallEnterCallback indicates
+            if (uncaptureAllowed) {
+                assert(capturedThreads == 1);
+                assert(threadStates[tid] == BLOCKED);
+            }
 
             // We can't uncapture, as there's nothing to switch to! Instead:
-            // 1. Post a delayed uncapture
+            // 1. Post a delayed uncapture (if allowed)
             executorTid = curTid;
             assert(!executorInSyscall);
             executorInSyscall = true;
+            delayedUncaptureAllowed = uncaptureAllowed;
 
             // 2. Wake the other thread (who's in WaitForExecutor, see the matching logic there)
             DEBUG("[%d] SG: Waking real tid %d to run its syscall, and blocking ourselves", tid, curTid);
@@ -383,7 +400,7 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         }
     } else {
         // We ourselves need to take the syscall...
-        if (capturedThreads >= 2) {
+        if (capturedThreads >= 2 && uncaptureAllowed) {
             // 2. Wake up another idle thread to continue execution
             // Instead of searching for an idle non-executor thread, we
             // leverage that the thread we switch to must be captured, and make
@@ -395,10 +412,12 @@ void SyscallGuard(THREADID tid, const CONTEXT* ctxt) {
         } else {
             // 3. We're the only captured thread, so if we uncaptured ourselves
             // the tool would run out of threads. Instead, let the first
-            // captured thread do a delayed uncapture (or we'll do one)
+            // captured thread do a delayed uncapture (if allowed). Otherwise,
+            // we'll resume execution ourselves after the syscall.
             DEBUG("[%d] SG: Delayed uncapture", tid);
             assert(!executorInSyscall);
             executorInSyscall = true;
+            delayedUncaptureAllowed = uncaptureAllowed;
         }
 
         executorMutex.unlock();
@@ -509,6 +528,7 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     curTid = -1u;
     executorTid = -1u;
     executorInSyscall = false;
+    delayedUncaptureAllowed = true;
     switchFlags = SF_NONE;
     capturedThreads = 0;
 
@@ -527,12 +547,12 @@ void init(TraceCallback traceCb, ThreadCallback startCb, ThreadCallback endCb, C
     PIN_AddThreadFiniFunction(ThreadFini, 0);
 }
 
-void setSyscallEnterCallback(SyscallCallback syscallEnterCb) {
+void setSyscallEnterCallback(SyscallEnterCallback syscallEnterCb) {
     if (syscallEnterCallback) DEBUG("Overriding previous syscallEnterCallback");
     syscallEnterCallback = syscallEnterCb;
 }
 
-void setSyscallExitCallback(SyscallCallback syscallExitCb) {
+void setSyscallExitCallback(SyscallExitCallback syscallExitCb) {
     if (syscallExitCallback) DEBUG("Overriding previous syscallExitCallback");
     syscallExitCallback = syscallExitCb;
 }
