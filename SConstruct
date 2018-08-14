@@ -36,7 +36,8 @@ sanitizeInput(speedArg, ['slow', 'fast'])
 env = Environment(ENV = os.environ)
 
 env['CPPFLAGS'] = ['-std=c++11', '-Wall', '-Werror', '-Wno-unknown-pragmas',
-    '-fomit-frame-pointer', '-fno-stack-protector']
+    '-fomit-frame-pointer', '-fno-stack-protector',
+    '-fabi-version=2', '-D_GLIBCXX_USE_CXX11_ABI=0']
 env['CPPPATH'] = [os.path.abspath('include/')]
 
 modeFlags = {
