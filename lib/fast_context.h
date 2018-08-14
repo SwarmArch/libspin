@@ -33,6 +33,8 @@
 #include <assert.h>
 #include <set>
 
+#include <immintrin.h>  // for __m256
+
 // When defined, reads and writes check that tc is valid, BUT THEY CANNOT BE
 // INLINED. Thus, these carry a ~5x perf penalty!!
 #define CHECK_TC(tc) //assert(tc)
@@ -45,11 +47,11 @@ struct ThreadContext {
     uint64_t rip;
     uint64_t rflags;
     uint64_t gpRegs[REG_GR_LAST - REG_GR_BASE + 1];
-    
+
     // Segments. In 64 bits, only fs and gs are used (read-only), but fsBase
     // and gsBase are also needed
     uint64_t fs, fsBase, gs, gsBase;
-   
+
     // NOTE: For SSE/SSE2/.../AVX, we ALWAYS save and restore 256 ymm (AVX)
     // registers, as EMM/XMM regs are aliased to YMM. This will not work if
     // you try to run on < Sandy Bridge (in those archs, we should save/restore
@@ -59,7 +61,7 @@ struct ThreadContext {
     // inefficient. This is just 4 MOVs.
     typedef std::array<uint64_t, 4> ymmReg;
     ymmReg fpRegs[REG_YMM_LAST - REG_YMM_BASE + 1];
-    
+
     // All other regs use a normal context (huge, and accessor methods are
     // slow, but should be accessed sparingly)
     CONTEXT pinCtxt;
