@@ -488,6 +488,38 @@ void NotifySetLiveReg() {
 /* Instrumentation */
 
 void InstrumentTrace(TRACE trace, VOID *v) {
+    // If we're one block away from filling up the code cache, force a flush.
+    // We need this because Pin does not flush the cache while threads are
+    // blocked on analysis functions. We leave non-executor threads blocked for
+    // long periods of time, and without forced flushes Pin eventually crashes.
+    //
+    // NOTE: Each code cache flush leaks some memory, which to a first order is
+    // proportional to the size of the cache. Therefore, frequent flushes will
+    // consume too much memory and crash. You should make the code cache size
+    // as large as possible (as of Pin 2.14, this is 4GB). I've also seen less
+    // frequent flushes with ~64KB blocks instead of the default 256KB. This is
+    // also why we wait until the very last block to force a flush.
+    //
+    // IMPORTANT: If you tune the code cache and block sizes, do so using pin
+    // flags---changing them at initialization using the CodeCache API causes
+    // Pin to misbehave.
+    //
+    // NOTE: At least on Pin 2.14 / 71293, this memory leak does NOT depend on
+    // the flushes being forced. I implemented a much more complex solution
+    // that uses PIN_IsActionPending(tid) to wake all non-executor threads,
+    // cycle them through a dummy basic block, and capture them again. When all
+    // threads are cycled, Pin does the flush by itself as it should. However,
+    // experiments with both strategies on small code caches show the same
+    // amount of leakage. Therefore, we use the simpler option.
+    auto codeCacheUsed = CODECACHE_CodeMemUsed();
+    auto codeCacheLimit = CODECACHE_CacheSizeLimit();
+    if (unlikely(codeCacheUsed >= (codeCacheLimit - CODECACHE_BlockSize()))) {
+        info("Flushing code cache (%d/%d KB used, PIN mem %d KB)",
+             codeCacheUsed >> 10, codeCacheLimit >> 10,
+             PIN_MemoryAllocatedForPin() >> 10);
+        CODECACHE_FlushCache();
+    }
+
     INS firstIns = BBL_InsHead(TRACE_BblHead(trace));
     bool isSyscallTrace = INS_IsSyscall(firstIns);
 
