@@ -647,7 +647,7 @@ void loop() {
 }
 
 bool isLoopSet() {
-    return switchFlags && SF_LOOP;
+    return switchFlags & SF_LOOP;
 }
 
 }  // namespace spin
