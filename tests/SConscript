@@ -15,11 +15,13 @@
 # You should have received a copy of the GNU General Public License along with
 # this program. If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import (absolute_import, division, print_function)
+
 Import('env')
 progEnv = env.Clone()
 progEnv.Append(LINKFLAGS = ['-static']) # better PC-based debugging
 srcs = Glob('*.cpp') + Glob('*.s')
-progs = map(lambda f: str(f).split("/")[-1].split(".")[0], srcs)
+progs = [str(f).split("/")[-1].split(".")[0] for f in srcs]
 
 for (prog, src) in zip(progs, srcs):
     if src.path.endswith(".s"):
