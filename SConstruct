@@ -49,13 +49,6 @@ modeFlags = {
 }
 env.Append(CPPFLAGS = modeFlags[mode])
 
-if speedArg == 'fast':
-    # AVX is required by spin-fast; this compiles SNB(mad/draco)-compatible code
-    # from anywhere.
-    # To build for an architecture without AVX, use the speed=slow scons option.
-    archFlags = ['-march=corei7-avx', '-mavx', '-msse4.1', '-msse4.2']
-    env.Append(CPPFLAGS = archFlags)
-
 # Environment for library (paths assume Pin 2.14)
 pinEnv = env.Clone()
 

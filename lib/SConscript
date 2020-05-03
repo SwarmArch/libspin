@@ -21,13 +21,16 @@ Import('env', 'speed')
 
 assert speed in ['fast', 'slow']
 
-libEnv = None
+libEnv = env.Clone()
 if speed == 'slow':
-    libEnv = env.Clone()
     libEnv.Append(CPPDEFINES = 'SPIN_SLOW')
     libEnv['OBJSUFFIX'] = '.oslow'
 else:
-    libEnv = env
+    assert speed == 'fast'
+    # AVX is required by spin-fast; this compiles SNB-compatible code.
+    # To build for an architecture without AVX, use the speed=slow scons option.
+    archFlags = ['-march=corei7-avx', '-mavx', '-msse4.1', '-msse4.2']
+    libEnv.Append(CPPFLAGS = archFlags)
 
 lib = libEnv.StaticLibrary(target='libspin_{}.a'.format(speed),
                            source='spin.cpp')
