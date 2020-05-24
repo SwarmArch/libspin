@@ -1,11 +1,17 @@
 # $lic$
-# Copyright (C) 2015 by Massachusetts Institute of Technology
+# Copyright (C) 2015-2020 by Massachusetts Institute of Technology
 #
 # This file is part of libspin.
 #
 # libspin is free software; you can redistribute it and/or modify it under the
 # terms of the GNU General Public License as published by the Free Software
 # Foundation, version 2.
+#
+# libspin was developed as part of the Swarm architecture simulator. If you
+# use this software in your research, we request that you reference the Swarm
+# paper ("A Scalable Architecture for Ordered Parallelism", Jeffrey et al.,
+# MICRO-48, 2015) as the source of libspin in any publications that use this
+# software, and that you send us a citation of your work.
 #
 # libspin is distributed in the hope that it will be useful, but WITHOUT ANY
 # WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
