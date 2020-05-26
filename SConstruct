@@ -33,13 +33,9 @@ def sanitizeInput(userinput, allowables):
 
 
 # Get the mode flag from the command line
-mode = ARGUMENTS.get('mode', 'opt')
+AddOption('--libspinMode', type=str, default='opt')
+mode = GetOption('libspinMode')
 sanitizeInput(mode, ['debug', 'opt', 'release'])
-
-# fast speed requires AVX.
-# fast speed implies building both fast and slow
-speedArg = ARGUMENTS.get('speed', 'fast')
-sanitizeInput(speedArg, ['slow', 'fast'])
 
 env = Environment(ENV = os.environ)
 
@@ -87,12 +83,13 @@ pinEnv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
 
 genericToolEnv = pinEnv.Clone()
 
-for speed in set(['slow', speedArg]):
-    spinLib = SConscript('lib/SConscript',
+spinLibs = SConscript('lib/SConscript',
         variant_dir = os.path.join('build', mode, 'lib'),
-        exports = {'env' : pinEnv, 'speed' : speed},
+        exports = {'env' : pinEnv},
         duplicate = 0)
-
+spinLibs = [lib for lib in spinLibs if lib]
+for spinLib in spinLibs:
+    speed = 'slow' if 'slow' in spinLib[0].name else 'fast'
     toolEnv = genericToolEnv.Clone()
     toolEnv.Prepend(LIBS = [spinLib])
     if speed == 'slow':
