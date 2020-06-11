@@ -82,6 +82,17 @@ namespace spin {
                 callpoints.push_back(std::make_tuple(ins, ipoint, f));
             }
 
+            // Same as insertCall, but takes an IARGLIST instead of loose arguments
+            // Unlike INS_InsertCall, caller should NOT manually free list
+            void insertCallList(INS ins, IPOINT ipoint, AFUNPTR func, IARGLIST list) {
+                auto insLambda = [=] () {
+                    // TODO: I think call order should not be an issue anymore
+                    INS_InsertCall(ins, ipoint, func, IARG_IARGLIST, list, IARG_END);
+                    IARGLIST_Free(list);
+                };
+                callpoints.push_back(std::make_tuple(ins, ipoint, insLambda));
+            }
+
             template <typename ...Args>
             void insertSwitchCall(INS ins, IPOINT ipoint, AFUNPTR func, Args... args) {
                 auto insLambda = [=] (Args... args) {
@@ -89,6 +100,16 @@ namespace spin {
                 };
                 std::function<void()> f = std::bind(insLambda, args...);
                 switchpoints.push_back(std::make_tuple(ins, ipoint, f));
+            }
+
+            // Same as insertCall, but takes an IARGLIST instead of loose arguments
+            // Unlike INS_InsertCall, caller should NOT manually free list
+            void insertSwitchCallList(INS ins, IPOINT ipoint, AFUNPTR func, IARGLIST list) {
+                auto insLambda = [=] () {
+                    INS_InsertCall(ins, ipoint, func, IARG_IARGLIST, list, IARG_RETURN_REGS, __getSwitchReg() /*jump target*/, IARG_END);
+                    IARGLIST_Free(list);
+                };
+                switchpoints.push_back(std::make_tuple(ins, ipoint, insLambda));
             }
 
             friend void InstrumentTrace(TRACE trace, VOID* v);
