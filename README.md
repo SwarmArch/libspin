@@ -27,6 +27,12 @@ Main features:
 Using libspin
 -------------
 
+You can build and run the example tool and a test application as follows:
+```
+scons
+$PINPATH/intel64/bin/pinbin -ifeellucky -t build/opt/tools_fast/interleaver.so -- build/opt/tests/atomic_add 100 1000
+```
+
 Read the source of the simple, slow implementation, and the
 examples/tests, to learn the interface. At a high level, libspin interposes on
 all your analysis functions. Some of your analysis functions can be special
