@@ -25,17 +25,8 @@ from __future__ import (absolute_import, division, print_function)
 
 import os
 
-def sanitizeInput(userinput, allowables):
-    if not (userinput in allowables):
-        print("Error: expected one of [{}], found {}".format(
-                ', '.join(allowables), userinput))
-        Exit(1)
-
-
-# Get the mode flag from the command line
-AddOption('--libspinMode', type=str, default='opt')
+AddOption('--libspinMode', type='choice', choices=['debug', 'opt', 'release'], default='opt')
 mode = GetOption('libspinMode')
-sanitizeInput(mode, ['debug', 'opt', 'release'])
 
 env = Environment(ENV = os.environ)
 
@@ -49,7 +40,10 @@ modeFlags = {
     'release' : ['-O3', '-DNDEBUG', '-DNASSERT', '-gdwarf-3', '-Wno-unused-variable'],
     'debug' : ['-O0', '-gdwarf-3'],
 }
-env.Append(CPPFLAGS = modeFlags[mode])
+
+archFlags = ['-march=core2']
+
+env.Append(CPPFLAGS = modeFlags[mode] + archFlags)
 
 # Environment for library (paths assume Pin 2.14)
 pinEnv = env.Clone()
@@ -81,16 +75,12 @@ assert os.path.exists(pinverspath), pinverspath
 pinEnv.Append(LINKFLAGS = ['-Wl,--hash-style=sysv',
     '-Wl,--version-script=' + pinverspath, '-Wl,-Bsymbolic', '-shared'])
 
-genericToolEnv = pinEnv.Clone()
-
-spinLibs = SConscript('lib/SConscript',
+slowLib, fastLib = SConscript('lib/SConscript',
         variant_dir = os.path.join('build', mode, 'lib'),
         exports = {'env' : pinEnv},
         duplicate = 0)
-spinLibs = [lib for lib in spinLibs if lib]
-for spinLib in spinLibs:
-    speed = 'slow' if 'slow' in spinLib[0].name else 'fast'
-    toolEnv = genericToolEnv.Clone()
+for spinLib, speed in [(slowLib, 'slow'), (fastLib, 'fast')]:
+    toolEnv = pinEnv.Clone()
     toolEnv.Prepend(LIBS = [spinLib])
     if speed == 'slow':
         toolEnv.Append(CPPDEFINES = 'SPIN_SLOW')

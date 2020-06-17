@@ -39,8 +39,6 @@
 #include <assert.h>
 #include <set>
 
-#include <immintrin.h>  // for __m256
-
 // When defined, reads and writes check that tc is valid, BUT THEY CANNOT BE
 // INLINED. Thus, these carry a ~5x perf penalty!!
 #define CHECK_TC(tc) //assert(tc)
@@ -48,6 +46,8 @@
 namespace spin {
 
 /* Performance- and locality-optimized context state */
+
+static REG vectorRegBase = REG_INVALID_;
 
 struct ThreadContext {
     uint64_t rip;
@@ -58,15 +58,14 @@ struct ThreadContext {
     // and gsBase are also needed
     uint64_t fs, fsBase, gs, gsBase;
 
-    // NOTE: For SSE/SSE2/.../AVX, we ALWAYS save and restore 256 ymm (AVX)
-    // registers, as EMM/XMM regs are aliased to YMM. This will not work if
-    // you try to run on < Sandy Bridge (in those archs, we should save/restore
-    // XMM regs)
+    // SSE/AVX registers (XMM/YMM)
+    // We always allocate enough space to save/restore 256-bit YMMs.  We detect
+    // whether we need to actually save/restore XMMs or YMMs at runtime.
     // NOTE(dsm): I tried to use __m256 here. BAD IDEA. Pin does not give YMM
     // regs properly aligned, and the code sequences you end up with are very
-    // inefficient. This is just 4 MOVs.
+    // inefficient. Accessing this array is just one MOV per 64-bit element.
     typedef std::array<uint64_t, 4> ymmReg;
-    ymmReg fpRegs[REG_YMM_LAST - REG_YMM_BASE + 1];
+    ymmReg vectorRegs[REG_YMM_LAST - REG_YMM_BASE + 1];
 
     // All other regs use a normal context (huge, and accessor methods are
     // slow, but should be accessed sparingly)
@@ -91,10 +90,19 @@ inline void InitContext(const CONTEXT* ctxt, ThreadContext* tc) {
     tc->gs = PIN_GetContextReg(ctxt, REG_SEG_GS);
     tc->gsBase = PIN_GetContextReg(ctxt, REG_SEG_GS_BASE);
 
-    for (uint32_t i = REG_YMM_BASE; i <= REG_YMM_LAST; i++) {
-        REG r = (REG)i;
-        assert(REG_Size(r) == sizeof(__m256));
-        PIN_GetContextRegval(ctxt, (REG)i, (uint8_t*)&tc->fpRegs[i - REG_YMM_BASE]);
+    uint32_t vectorRegSize;
+    if (PIN_ContextContainsState((CONTEXT*)ctxt, PROCESSOR_STATE_YMM)) {
+        vectorRegSize = 32;
+        vectorRegBase = REG_YMM_BASE;
+    } else {  // We are running on a machine without AVX
+        vectorRegSize = 16;
+        vectorRegBase = REG_XMM_BASE;
+    }
+    const REG vectorRegBaseCopy = vectorRegBase;  // manual loop-invariant code motion
+    for (uint32_t i = 0; i < 16; i++) {
+        REG r = (REG)(vectorRegBaseCopy + i);
+        assert(REG_Size(r) == vectorRegSize);
+        PIN_GetContextRegval(ctxt, r, (uint8_t*)&tc->vectorRegs[i]);
     }
 }
 
@@ -109,10 +117,11 @@ inline void UpdatePinContext(ThreadContext* tc) {
 
     // NOTE: No need to update segment regs, which are read-only
 
-    for (uint32_t i = REG_YMM_BASE; i <= REG_YMM_LAST; i++) {
-        REG r = (REG)i;
-        assert(REG_Size(r) == sizeof(__m256));
-        PIN_SetContextRegval(&tc->pinCtxt, (REG)i, (uint8_t*)&tc->fpRegs[i - REG_YMM_BASE]);
+    const REG vectorRegBaseCopy = vectorRegBase;  // manual loop-invariant code motion
+    assert(REG_valid(vectorRegBaseCopy));
+    for (uint32_t i = 0; i < 16; i++) {
+        REG r = (REG)(vectorRegBaseCopy + i);
+        PIN_SetContextRegval(&tc->pinCtxt, r, (uint8_t*)&tc->vectorRegs[i]);
     }
 }
 
@@ -142,11 +151,18 @@ template <REG r> inline ADDRINT ReadReg(const ThreadContext* tc) {
     }
 }
 
-template <REG r> void ReadFPReg(const ThreadContext* tc, PIN_REGISTER* reg) {
+template <REG r> void ReadXMMReg(const ThreadContext* tc, PIN_REGISTER* reg) {
+    CHECK_TC(tc);
+    constexpr uint32_t i = (uint32_t)r;
+    static_assert(i >= REG_XMM_BASE && i <= REG_XMM_LAST, "Only valid for XMM regs");
+    for (uint32_t w = 0; w < 2; w++) reg->qword[w] = tc->vectorRegs[i - REG_XMM_BASE][w];
+}
+
+template <REG r> void ReadYMMReg(const ThreadContext* tc, PIN_REGISTER* reg) {
     CHECK_TC(tc);
     constexpr uint32_t i = (uint32_t)r;
     static_assert(i >= REG_YMM_BASE && i <= REG_YMM_LAST, "Only valid for YMM regs");
-    for (uint32_t w = 0; w < 4; w++) reg->qword[w] = tc->fpRegs[i - REG_YMM_BASE][w];
+    for (uint32_t w = 0; w < 4; w++) reg->qword[w] = tc->vectorRegs[i - REG_YMM_BASE][w];
 }
 
 // Slow, Pin does not inline, invalid for the regs above
@@ -181,11 +197,18 @@ template <REG r> inline void WriteReg(ThreadContext* tc, ADDRINT regVal) {
 
 // NOTE: No FS/GS write methods. Userspace does not write them
 
-template <REG r> void WriteFPReg(ThreadContext* tc, const PIN_REGISTER* reg) {
+template <REG r> void WriteXMMReg(ThreadContext* tc, const PIN_REGISTER* reg) {
+    CHECK_TC(tc);
+    constexpr uint32_t i = (uint32_t)r;
+    static_assert(i >= REG_XMM_BASE && i <= REG_XMM_LAST, "Only valid for XMM regs");
+    for (uint32_t w = 0; w < 2; w++) tc->vectorRegs[i - REG_XMM_BASE][w] = reg->qword[w];
+}
+
+template <REG r> void WriteYMMReg(ThreadContext* tc, const PIN_REGISTER* reg) {
     CHECK_TC(tc);
     constexpr uint32_t i = (uint32_t)r;
     static_assert(i >= REG_YMM_BASE && i <= REG_YMM_LAST, "Only valid for YMM regs");
-    for (uint32_t w = 0; w < 4; w++) tc->fpRegs[i - REG_YMM_BASE][w] = reg->qword[w];
+    for (uint32_t w = 0; w < 4; w++) tc->vectorRegs[i - REG_YMM_BASE][w] = reg->qword[w];
 }
 
 // Slow, Pin does not inline, invalid for the regs above
