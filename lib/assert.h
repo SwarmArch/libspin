@@ -78,15 +78,19 @@ class PrintExpr {
 };
 
 #ifndef NASSERT
-#define assert(expr) \
-if (unlikely(!(expr))) { \
-    std::stringstream __assert_ss__LINE__; (PrintExpr(__assert_ss__LINE__)->*expr); \
-    panic("Failed assertion on %s:%d '%s' (with '%s')\n", __FILE__, __LINE__, #expr, __assert_ss__LINE__.str().c_str()); \
-};
+#define assert(expr)                                                        \
+    do {                                                                    \
+        if (unlikely(!(expr))) {                                            \
+            std::stringstream __assert_ss__LINE__;                          \
+            (void)(PrintExpr(__assert_ss__LINE__)->*expr);                  \
+            panic("Failed assertion on %s:%d '%s' (with '%s')\n", __FILE__, \
+                  __LINE__, #expr, __assert_ss__LINE__.str().c_str());      \
+        }                                                                   \
+    } while (0)
 #else
 // Avoid unused warnings, never emit any code
 // see http://cnicholson.net/2009/02/stupid-c-tricks-adventures-in-assert/
-#define assert(cond) do { (void)sizeof(cond); } while (0);
+#define assert(cond) do { (void)sizeof(cond); } while (0)
 #endif
 
 #endif  // ASSERT_H_
