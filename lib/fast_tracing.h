@@ -284,7 +284,7 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
     // copy the FP state among partial contexts wholesale.
     //
     // Note that reading the FP state comes *first*, before XMM/YMM reads,
-    // so that those can use the faster ReadFPReg calls.
+    // so that those can use the faster ReadXMMReg/ReadYMMReg calls.
     if (HasX87Regs(inRegs)) {
         REGSET inSet, outSet;
         REGSET_Clear(inSet); REGSET_Clear(outSet);
@@ -303,8 +303,8 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
         // Integer regs
         // NOTE: This big switch forces a full instantiation of all templates.
         // And instrumentation speed is not that critical...
-#define CASE_READ_REG(reg) case reg: fp = (AFUNPTR)ReadReg<reg>; break
         switch (r) {
+#define CASE_READ_REG(reg) case reg: fp = (AFUNPTR)ReadReg<reg>; break
             CASE_READ_REG(REG_RFLAGS);
             CASE_READ_REG(REG_RAX);
             CASE_READ_REG(REG_RBX);
@@ -326,20 +326,23 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
             CASE_READ_REG(REG_SEG_FS_BASE);
             CASE_READ_REG(REG_SEG_GS);
             CASE_READ_REG(REG_SEG_GS_BASE);
-            default:
-            nextClass = true;
-        }
 #undef CASE_READ_REG
+            default:
+                nextClass = true;
+        }
 
         if (!nextClass) {
             INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_RETURN_REGS, r, IARG_CALL_ORDER, callOrder, IARG_END);
             continue;
         }
 
-        // FP regs
+        // SIMD regs
+        // Note: REG_FullRegName has already been applied in FindInOutRegs,
+        // so this can be a YMM only if the host machine has AVX,
+        // and this can be an XMM only if the host machine lacks AVX.
         nextClass = false;
-#define CASE_READ_REG(reg) case reg: fp = (AFUNPTR)ReadFPReg<reg>; break
         switch (r) {
+#define CASE_READ_REG(reg) case reg: fp = (AFUNPTR)ReadYMMReg<reg>; break
             CASE_READ_REG(REG_YMM0);
             CASE_READ_REG(REG_YMM1);
             CASE_READ_REG(REG_YMM2);
@@ -356,10 +359,28 @@ void InsertRegReads(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::set
             CASE_READ_REG(REG_YMM13);
             CASE_READ_REG(REG_YMM14);
             CASE_READ_REG(REG_YMM15);
-            default:
-            nextClass = true;
-        }
 #undef CASE_READ_REG
+#define CASE_READ_REG(reg) case reg: fp = (AFUNPTR)ReadXMMReg<reg>; break
+            CASE_READ_REG(REG_XMM0);
+            CASE_READ_REG(REG_XMM1);
+            CASE_READ_REG(REG_XMM2);
+            CASE_READ_REG(REG_XMM3);
+            CASE_READ_REG(REG_XMM4);
+            CASE_READ_REG(REG_XMM5);
+            CASE_READ_REG(REG_XMM6);
+            CASE_READ_REG(REG_XMM7);
+            CASE_READ_REG(REG_XMM8);
+            CASE_READ_REG(REG_XMM9);
+            CASE_READ_REG(REG_XMM10);
+            CASE_READ_REG(REG_XMM11);
+            CASE_READ_REG(REG_XMM12);
+            CASE_READ_REG(REG_XMM13);
+            CASE_READ_REG(REG_XMM14);
+            CASE_READ_REG(REG_XMM15);
+#undef CASE_READ_REG
+            default:
+                nextClass = true;
+        }
 
         if (!nextClass) {
             INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
@@ -394,8 +415,8 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
         bool nextClass = false;
 
         // Integer regs
-#define CASE_WRITE_REG(reg) case reg: fp = (AFUNPTR)WriteReg<reg>; break
         switch (r) {
+#define CASE_WRITE_REG(reg) case reg: fp = (AFUNPTR)WriteReg<reg>; break
             CASE_WRITE_REG(REG_RFLAGS);
             CASE_WRITE_REG(REG_RAX);
             CASE_WRITE_REG(REG_RBX);
@@ -413,20 +434,27 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
             CASE_WRITE_REG(REG_R13);
             CASE_WRITE_REG(REG_R14);
             CASE_WRITE_REG(REG_R15);
-            default:
-            nextClass = true;
-        }
 #undef CASE_WRITE_REG
+            case REG_SEG_FS:
+            case REG_SEG_FS_BASE:
+            case REG_SEG_GS:
+            case REG_SEG_GS_BASE:
+                panic("Only supervisor instrs can write segment reg %s",
+                      REG_StringShort(r).c_str());
+                continue;
+            default:
+                nextClass = true;
+        }
 
         if (!nextClass) {
             INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_VALUE, r, IARG_CALL_ORDER, callOrder, IARG_END);
             continue;
         }
 
-        // FP regs
+        // SIMD regs
         nextClass = false;
-#define CASE_WRITE_REG(reg) case reg: fp = (AFUNPTR)WriteFPReg<reg>; break
         switch (r) {
+#define CASE_WRITE_REG(reg) case reg: fp = (AFUNPTR)WriteYMMReg<reg>; break
             CASE_WRITE_REG(REG_YMM0);
             CASE_WRITE_REG(REG_YMM1);
             CASE_WRITE_REG(REG_YMM2);
@@ -443,18 +471,32 @@ void InsertRegWrites(INS ins, IPOINT ipoint, CALL_ORDER callOrder, const std::se
             CASE_WRITE_REG(REG_YMM13);
             CASE_WRITE_REG(REG_YMM14);
             CASE_WRITE_REG(REG_YMM15);
-            default:
-            nextClass = true;
-        }
 #undef CASE_WRITE_REG
+#define CASE_WRITE_REG(reg) case reg: fp = (AFUNPTR)WriteXMMReg<reg>; break
+            CASE_WRITE_REG(REG_XMM0);
+            CASE_WRITE_REG(REG_XMM1);
+            CASE_WRITE_REG(REG_XMM2);
+            CASE_WRITE_REG(REG_XMM3);
+            CASE_WRITE_REG(REG_XMM4);
+            CASE_WRITE_REG(REG_XMM5);
+            CASE_WRITE_REG(REG_XMM6);
+            CASE_WRITE_REG(REG_XMM7);
+            CASE_WRITE_REG(REG_XMM8);
+            CASE_WRITE_REG(REG_XMM9);
+            CASE_WRITE_REG(REG_XMM10);
+            CASE_WRITE_REG(REG_XMM11);
+            CASE_WRITE_REG(REG_XMM12);
+            CASE_WRITE_REG(REG_XMM13);
+            CASE_WRITE_REG(REG_XMM14);
+            CASE_WRITE_REG(REG_XMM15);
+#undef CASE_WRITE_REG
+            default:
+                nextClass = true;
+        }
 
         if (!nextClass) {
             INS_InsertCall(ins, ipoint, fp, IARG_REG_VALUE, tcReg, IARG_REG_CONST_REFERENCE, r, IARG_CALL_ORDER, callOrder, IARG_END);
             continue;
-        }
-
-        if (r == REG_SEG_FS || r == REG_SEG_FS_BASE || r == REG_SEG_GS || r == REG_SEG_GS_BASE) {
-            panic("Only supervisor instrs can write segment reg %s", REG_StringShort(r).c_str());
         }
 
         // Misc regs (warn, as I don't think we have any left at this point...)

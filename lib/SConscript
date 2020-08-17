@@ -27,11 +27,6 @@ import os
 
 Import('env')
 
-# fast speed requires AVX.
-# fast speed implies building both fast and slow
-AddOption('--libspinSpeed', type=str, default='fast')
-assert GetOption('libspinSpeed') in ['fast', 'slow']
-
 includePath = os.path.abspath(os.path.join(Dir('.').srcnode().abspath, '../include/'))
 
 slowEnv = env.Clone()
@@ -40,15 +35,8 @@ slowEnv.Append(CPPDEFINES = 'SPIN_SLOW')
 slowEnv['OBJSUFFIX'] = '.oslow'
 slowlib = slowEnv.StaticLibrary(target='libspin_slow.a', source='spin.cpp')
 
-fastlib = None
-if GetOption('libspinSpeed') == 'fast':
-   fastEnv = env.Clone()
-   fastEnv.Append(CPPPATH = [includePath])
-   # AVX is required by spin-fast; this compiles SNB-compatible code.
-   # To build for an architecture without AVX, use the speed=slow scons option.
-   archFlags = ['-march=corei7-avx', '-mavx', '-msse4.1', '-msse4.2']
-   fastEnv.Append(CPPFLAGS = archFlags)
-
-   fastlib = fastEnv.StaticLibrary(target='libspin_fast.a', source='spin.cpp')
+fastEnv = env.Clone()
+fastEnv.Append(CPPPATH = [includePath])
+fastlib = fastEnv.StaticLibrary(target='libspin_fast.a', source='spin.cpp')
 
 Return('slowlib', 'fastlib')
