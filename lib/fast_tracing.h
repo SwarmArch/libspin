@@ -253,12 +253,16 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
         tc->rflags = val;
     } else if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) {
         tc->gpRegs[regIdx - REG_GR_BASE] = val;
+    } else if (regIdx >= REG_XMM0 && regIdx <= REG_XMM7) {
+        // THIS ONLY WRITES THE LOW EIGHT BYTES AND DOES NO CONVERSION
+        tc->vectorRegs[regIdx-REG_XMM_BASE][0] = val;
+        for (unsigned i = 1; i < MAX_QWORDS_PER_PIN_REG; i++)
+            tc->vectorRegs[regIdx-REG_XMM_BASE][i] = 0;
     } else if (regIdx >= REG_YMM0 && regIdx <= REG_YMM7) {
         // THIS ONLY WRITES THE LOW EIGHT BYTES AND DOES NO CONVERSION
         tc->vectorRegs[regIdx-REG_YMM_BASE][0] = val;
         for (unsigned i = 1; i < MAX_QWORDS_PER_PIN_REG; i++)
             tc->vectorRegs[regIdx-REG_YMM_BASE][i] = 0;
-        // info("set reg %d to 0x%lx", regIdx, val);
     } else {
         panic("setReg(): Register %s (%d) not supported for now (edit me!)",
                 REG_StringShort(reg).c_str(), regIdx);
