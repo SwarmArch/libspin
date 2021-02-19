@@ -225,6 +225,8 @@ uint64_t getReg(const ThreadContext* tc, REG reg) {
     reg = REG_FullRegName(reg);
     uint32_t regIdx = (uint32_t)reg;
     if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) return tc->gpRegs[regIdx - REG_GR_BASE];
+    if (regIdx >= REG_XMM0 && regIdx <= REG_XMM_LAST) return tc->vectorRegs[regIdx-REG_XMM_BASE][0]; // no fp conversion
+    if (regIdx >= REG_YMM0 && regIdx <= REG_YMM_LAST) return tc->vectorRegs[regIdx-REG_YMM_BASE][0]; // no fp conversion
 
     switch (reg) {
         case REG_RIP: return tc->rip;
@@ -253,15 +255,17 @@ void setReg(ThreadContext* tc, REG reg, uint64_t val) {
         tc->rflags = val;
     } else if (regIdx >= REG_GR_BASE && regIdx <= REG_GR_LAST) {
         tc->gpRegs[regIdx - REG_GR_BASE] = val;
-    } else if (regIdx >= REG_XMM0 && regIdx <= REG_XMM7) {
-        // THIS ONLY WRITES THE LOW EIGHT BYTES AND DOES NO CONVERSION
+    } else if (regIdx >= REG_XMM_BASE && regIdx <= REG_XMM_LAST) {
+        // only writes val into low eight bytes & clears rest of register;
+        // no fp conversion
         tc->vectorRegs[regIdx-REG_XMM_BASE][0] = val;
-        for (unsigned i = 1; i < MAX_QWORDS_PER_PIN_REG; i++)
+        for (unsigned i = 1; i < tc->vectorRegs[0].size(); i++)
             tc->vectorRegs[regIdx-REG_XMM_BASE][i] = 0;
-    } else if (regIdx >= REG_YMM0 && regIdx <= REG_YMM7) {
-        // THIS ONLY WRITES THE LOW EIGHT BYTES AND DOES NO CONVERSION
+    } else if (regIdx >= REG_YMM_BASE && regIdx <= REG_YMM_LAST) {
+        // only writes val into low eight bytes & clears rest of register;
+        // no fp conversion
         tc->vectorRegs[regIdx-REG_YMM_BASE][0] = val;
-        for (unsigned i = 1; i < MAX_QWORDS_PER_PIN_REG; i++)
+        for (unsigned i = 1; i < tc->vectorRegs[0].size(); i++)
             tc->vectorRegs[regIdx-REG_YMM_BASE][i] = 0;
     } else {
         panic("setReg(): Register %s (%d) not supported for now (edit me!)",

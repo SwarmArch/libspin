@@ -70,11 +70,26 @@ void UpdatePinContext(ThreadContext* tc) {
 
 /* Public context functions */
 uint64_t getReg(const ThreadContext* tc, REG reg) {
-    return PIN_GetContextReg((const CONTEXT*)tc, reg);
+    if (REG_is_xmm_ymm_zmm(reg)) {
+        uint64_t regval[MAX_QWORDS_PER_PIN_REG];
+        PIN_GetContextRegval((const CONTEXT*)tc, reg, (unsigned char*)regval);
+        // no fp conversion
+        return regval[0];
+    } else {
+        return PIN_GetContextReg((const CONTEXT*)tc, reg);
+    }
 }
 
 void setReg(ThreadContext* tc, REG reg, uint64_t val) {
-    PIN_SetContextReg((CONTEXT*)tc, reg, val);
+    if (REG_is_xmm_ymm_zmm(reg)) {
+        // only writes val into low eight bytes & clears rest of register;
+        // no fp conversion
+        uint64_t regval[MAX_QWORDS_PER_PIN_REG] = {val};
+        PIN_SetContextRegval((CONTEXT*)tc, reg, (const unsigned char*)regval);
+    } else {
+        PIN_SetContextReg((CONTEXT*)tc, reg, val);
+    }
+
     uint32_t tid = PIN_GetContextReg((CONTEXT*)tc, tidReg);
     if (tid != -1u) {
         // This is the live context
